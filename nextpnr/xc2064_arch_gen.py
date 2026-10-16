@@ -19,7 +19,11 @@
 #   Routing:
 #     Einzelsegmente: 4 Leitungen je Kanal zwischen benachbarten Switch-Matrizen
 #     Switch-Matrix:  2 je Kreuzung, 8 Pins (2 je Seite), jeder Pin mit 5 der 7 anderen verbindbar
-#     Rand:           jedes Pad hängt am Kanalstück neben sich (zwischen Pad und nächster Matrix)
+#     IOBs:           wie im Original (Shirriffs iob.js) am Kanalstück parallel zum Rand neben einer
+#                     Rand-CLB: das erste Pad einer Kachel am eigenen Stück, das zweite am vorherigen.
+#                     Ausgang zum Pad (Bel-Pin I) und Tristate T wählen aus den 4 Spuren (I auch aus der
+#                     Long Line des Randkanals), der Eingang vom Pad (Bel-Pin O) treibt Spuren und Long
+#                     Line. Am rechten Rand nimmt das erste Pad X und Y der CLB links direkt.
 #     Ausgänge:       X und Y in den Kanal rechts der CLB, X an V2/V4 und die 1. vertikale Long Line,
 #                     Y an V1/V3 und die 2. (Shirriffs Bitmap; V5 fehlt im Modell, siehe Einzelsegmente)
 #     Eingänge:       A aus dem Kanal oberhalb und der Long Line der eigenen Zeile, D aus dem Kanal
@@ -83,9 +87,10 @@ def pad_info(pin, tile, style):
         side, x, y, idx = "R", LAST, r, r
     else:
         side, x, y, idx = "L", 0, r, r
-    # das zweite Pad einer Kachel hängt am nächsten Kanal (rechts bzw. darunter), am Rand am letzten
-    stub = min(idx + 1, LAST) if second else idx
-    return dict(pin=pin, x=x, y=y, z=z, side=side, stub=stub)
+    # Kanalstück parallel zum Rand: das zweite Pad einer Kachel ("topright", "rightlower", ...) hängt
+    # am Stück der vorherigen CLB (Shirriffs iob.js: clbw-Spalten bzw. Zeilen der vorherigen Reihe)
+    seg = idx - 1 if second else idx
+    return dict(pin=pin, x=x, y=y, z=z, side=side, seg=seg)
 
 
 PAD_INFO = [pad_info(*p) for p in PADS]
@@ -109,10 +114,15 @@ def is_io(x, y):
                                  or (x == 0 and 1 <= y <= N_CLB) or (y == 0 and 1 <= x <= LAST))
 
 
-def stub_pin(side, idx, m, k):
-    """Switch-Matrix-Pin, an dem das Kanalstück (side, idx) beginnt."""
-    return {"T": (idx, 1, sm_pin(m, "N", k)), "B": (idx, LAST, sm_pin(m, "S", k)),
-            "L": (1, idx, sm_pin(m, "W", k)), "R": (LAST, idx, sm_pin(m, "E", k))}[side]
+def pad_access(side, seg, m, k):
+    """Zugänge der Pads, die am Randkanalstück (side, seg) hängen, zu dessen Spur (m, k)."""
+    return [NodeWire(p["x"], p["y"], f"IO{p['z']}_T{m}{k}") for p in PAD_INFO
+            if side and p["side"] == side and p["seg"] == seg]
+
+
+def right_pad(seg):
+    """Erstes Pad am rechten Randkanalstück neben der CLB-Zeile seg (nimmt X und Y direkt)."""
+    return next((p for p in PAD_INFO if p["side"] == "R" and p["z"] == 0 and p["seg"] == seg), None)
 
 
 def create_switch_matrices(tt: TileType):
@@ -239,16 +249,24 @@ def create_io_tiletype(ch: Chip, x: int, y: int):
         tt.add_bel_pin(io, "T", f"IO{z}_T", PinType.INPUT)
         tt.add_bel_pin(io, "O", f"IO{z}_O", PinType.OUTPUT)
         tt.add_bel_pin(io, "PAD", f"IO{z}_PAD", PinType.INOUT)
-        # Zugang zum Kanalstück neben dem Pad (Knoten mit dem Switch-Matrix-Pin) und zur Long Line
-        longs = ["LH"] if p["side"] in "LR" else ["LV0", "LV1"]
-        for (m, k) in TRACKS:
-            tt.create_wire(f"IO{z}_T{m}{k}", "PAD_ACCESS")
-        for c in [f"IO{z}_T{m}{k}" for (m, k) in TRACKS] + longs:
+        # Zugang zum Kanalstück parallel zum Rand (Knoten mit dessen Switch-Matrix-Pins) und zur Long
+        # Line des Randkanals: waagerecht oben/unten, die beiden senkrechten links/rechts
+        longs = ["LV0", "LV1"] if p["side"] in "LR" else ["LH"]
+        tracks = [f"IO{z}_T{m}{k}" for (m, k) in TRACKS]
+        for c in tracks:
+            tt.create_wire(c, "PAD_ACCESS")
+        for c in tracks + longs:
             tt.create_pip(c, f"IO{z}_I", timing_class="INMUX")
             tt.create_pip(f"IO{z}_O", c, timing_class="OUTDRV")
+        for c in tracks:  # Tristate aus einer der 4 Spuren oder fest
+            tt.create_pip(c, f"IO{z}_T", timing_class="INMUX")
         for c in ("GND", "VCC"):
             tt.create_pip(c, f"IO{z}_I")
             tt.create_pip(c, f"IO{z}_T")
+        if p["side"] == "R" and z == 0:  # Direktverbindung von X und Y der CLB links
+            for o in ("X", "Y"):
+                tt.create_wire(f"IO0_{o}", "DIRECT")
+                tt.create_pip(f"IO0_{o}", "IO0_I", timing_class="INMUX")
         # Taktpuffer an den Pads P9 (GCLK) und P43 (ACLK)
         if p["pin"] in (GCLK_PIN, ACLK_PIN):
             src = "GCLK_SRC" if p["pin"] == GCLK_PIN else "ACLK_SRC"
@@ -275,12 +293,14 @@ def create_nodes(ch: Chip):
                     node = [NodeWire(x, y, sm_pin(m, "E", k)), NodeWire(x + 1, y, sm_pin(m, "W", k))]
                     if is_clb(x, y - 1):  # ... = Kanal unterhalb der CLB (x, y-1)
                         node.append(NodeWire(x, y - 1, f"BOT{m}{k}"))
+                    node += pad_access("T" if y == 1 else "B" if y == LAST else None, x, m, k)
                     ch.add_node(node)
                 # vertikales Einzelsegment links der CLB (x, y): Matrix (x, y) -> Matrix (x, y+1)
                 if has_sm(x, y) and has_sm(x, y + 1):
                     node = [NodeWire(x, y, sm_pin(m, "S", k)), NodeWire(x, y + 1, sm_pin(m, "N", k))]
                     if is_clb(x - 1, y):  # ... = Kanal rechts der CLB (x-1, y)
                         node.append(NodeWire(x - 1, y, f"RGT{m}{k}"))
+                    node += pad_access("L" if x == 1 else "R" if x == LAST else None, y, m, k)
                     ch.add_node(node)
             # Direktverbindungen zu den Nachbar-CLBs
             if is_clb(x, y):
@@ -289,29 +309,27 @@ def create_nodes(ch: Chip):
                     node.append(NodeWire(x, y + 1, "XT"))
                 if is_clb(x, y - 1):
                     node.append(NodeWire(x, y - 1, "XB"))
+                rp = right_pad(y) if x == N_CLB else None  # Pad am rechten Rand nimmt X und Y
+                if rp:
+                    node.append(NodeWire(rp["x"], rp["y"], "IO0_X"))
                 if len(node) > 1:
                     ch.add_node(node)
                 if is_clb(x + 1, y):
                     ch.add_node([NodeWire(x, y, "Y"), NodeWire(x + 1, y, "YL")])
-    # Kanalstücke am Rand: Switch-Matrix-Pin nach außen + die Pads, die daran hängen
-    for side in "TBLR":
-        for idx in range(1, LAST + 1):
-            for (m, k) in TRACKS:
-                sx, sy, pin = stub_pin(side, idx, m, k)
-                node = [NodeWire(sx, sy, pin)]
-                for p in PAD_INFO:
-                    if p["side"] == side and p["stub"] == idx:
-                        node.append(NodeWire(p["x"], p["y"], f"IO{p['z']}_T{m}{k}"))
-                ch.add_node(node)
-    # Long Lines über die volle Breite/Höhe bis zu den Pads; die der Zeile darunter erreicht D, die
-    # der Spalte rechts X und Y
+                elif rp:
+                    ch.add_node([NodeWire(x, y, "Y"), NodeWire(rp["x"], rp["y"], "IO0_Y")])
+    # Long Lines über das ganze Routing-Feld (Kacheln 1..9, von Randkanal zu Randkanal); die der Zeile
+    # darunter erreicht D, die der Spalte rechts X und Y, die der Randkanäle die Pads (oben über die
+    # LH der Pad-Kacheln, links über deren LV)
     for y in range(1, LAST + 1):
-        ch.add_node([NodeWire(x, y, "LH") for x in range(X) if is_clb(x, y) or is_io(x, y)]
-                    + [NodeWire(x, y - 1, "LHB") for x in range(X) if is_clb(x, y - 1)])
+        ch.add_node([NodeWire(x, y, "LH") for x in range(1, X) if is_clb(x, y) or is_io(x, y)]
+                    + [NodeWire(x, y - 1, "LHB") for x in range(X) if is_clb(x, y - 1)]
+                    + ([NodeWire(x, 0, "LH") for x in range(X) if is_io(x, 0)] if y == 1 else []))
     for x in range(1, LAST + 1):
         for i, v in enumerate(("LV0", "LV1")):
-            ch.add_node([NodeWire(x, y, v) for y in range(Y) if is_clb(x, y) or is_io(x, y)]
-                        + [NodeWire(x - 1, y, f"RLV{i}") for y in range(Y) if is_clb(x - 1, y)])
+            ch.add_node([NodeWire(x, y, v) for y in range(1, Y) if is_clb(x, y) or is_io(x, y)]
+                        + [NodeWire(x - 1, y, f"RLV{i}") for y in range(Y) if is_clb(x - 1, y)]
+                        + ([NodeWire(0, y, v) for y in range(Y) if is_io(0, y)] if x == 1 else []))
     # Globale Taktnetze: GCLK von P9, ACLK von P43 -> K aller CLBs
     clbs = [(x, y) for x in range(1, N_CLB + 1) for y in range(1, N_CLB + 1)]
     for net, pin in (("GCLK", GCLK_PIN), ("ACLK", ACLK_PIN)):

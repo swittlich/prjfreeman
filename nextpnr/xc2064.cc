@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <array>
 #include <set>
+#include <tuple>
 
 #include "himbaechel_api.h"
 #include "log.h"
@@ -100,11 +101,11 @@ struct Xc2064Impl : HimbaechelAPI
             if (ctx->getBelType(bel) != id_IOB)
                 continue;
             pad_bels[ctx->getBelName(bel)[1]] = bel;
-            // Kanalstück, an dem das Pad hängt (wie pad_info() im Generator), für die Grafik
+            // Randkanalstück, an dem das IOB hängt (wie pad_info() im Generator), für die Grafik
             Loc l = ctx->getBelLocation(bel);
             char side = io_side(l);
             int idx = (side == 'T' || side == 'B') ? l.x : l.y;
-            pad_stubs.insert({side, (l.z == 1 && idx < LAST) ? idx + 1 : idx});
+            iob_slots.insert({side, idx - l.z, l.z});
         }
         clock_pads = {pad_bels.at(ctx->id("P9")), pad_bels.at(ctx->id("P43"))};
     }
@@ -173,7 +174,7 @@ struct Xc2064Impl : HimbaechelAPI
     HimbaechelHelpers h;
     dict<IdString, BelId> pad_bels;
     std::array<BelId, 2> clock_pads;            // P9 (GCLK), P43 (ACLK)
-    std::set<std::pair<char, int>> pad_stubs; // Kanalstücke am Rand mit mindestens einem Pad
+    std::set<std::tuple<char, int, int>> iob_slots; // (Seite, Randkanalstück, z) mit IOB
 
     IdString lut_in(int i) const { return ctx->idf("I[%d]", i); }
 
@@ -620,77 +621,28 @@ struct Xc2064Impl : HimbaechelAPI
             return 'B';
         return loc.x == 0 ? 'L' : 'R';
     }
-    // Rahmen eines Pads (z = 0/1) in seiner IO-Kachel
-    static void pad_box(Loc loc, int z, float &x1, float &y1, float &x2, float &y2)
-    {
-        switch (io_side(loc)) {
-        case 'T':
-            x1 = 0.15 + 0.40 * z, x2 = x1 + 0.25, y1 = 0.10, y2 = 0.40;
-            break;
-        case 'B':
-            x1 = 0.15 + 0.40 * z, x2 = x1 + 0.25, y1 = 0.62, y2 = 0.90;
-            break;
-        case 'L':
-            x1 = 0.10, x2 = 0.40, y1 = 0.15 + 0.40 * z, y2 = y1 + 0.25;
-            break;
-        default:
-            x1 = 0.62, x2 = 0.90, y1 = 0.30 + 0.32 * z, y2 = y1 + 0.18;
-            break;
-        }
-    }
-
     Geom geom(Loc loc, int32_t id) const
     {
-        const int w = ctx->getGridDimX();
         if (is_sm_pin(id)) {
             int m, side, t;
             sm_pin(id, m, side, t);
             switch (side) {
-            case 0: // N: Segment nach oben (am oberen Rand: Stück zu den Pads)
-                return vtrack(trk(t), loc.y == 1 ? -0.62 : -1 + sm_hi(m), sm_lo(m));
+            case 0: // N: Segment nach oben
+                return vtrack(trk(t), -1 + sm_hi(m), sm_lo(m));
             case 1: // E
-                return htrack(trk(t), sm_hi(m), loc.x == LAST ? 0.62 : 1 + sm_lo(m));
+                return htrack(trk(t), sm_hi(m), 1 + sm_lo(m));
             case 2: // S
-                return vtrack(trk(t), sm_hi(m), loc.y == LAST ? 0.62 : 1 + sm_lo(m));
+                return vtrack(trk(t), sm_hi(m), 1 + sm_lo(m));
             default: // W
-                return htrack(trk(t), loc.x == 1 ? -0.62 : -1 + sm_hi(m), sm_lo(m));
-            }
-        }
-        if (id >= GFX_WIRE_IO0_T00 && id <= GFX_WIRE_IO1_T11) { // Pad -> Kanalstück daneben
-            int z = (id - GFX_WIRE_IO0_T00) / 4, t = (id - GFX_WIRE_IO0_T00) % 4;
-            char s = io_side(loc);
-            int idx = (s == 'T' || s == 'B') ? loc.x : loc.y;
-            float d = (z == 1 && idx < LAST) ? 1 : 0; // zweites Pad: Kanal rechts bzw. darunter
-            return (s == 'T' || s == 'B') ? vtrack(d + trk(t), 0, 1) : htrack(d + trk(t), 0, 1);
-        }
-        if (id >= GFX_WIRE_IO0_I && id <= GFX_WIRE_IO1_T) { // Pad-Pins an der Innenkante des Pads
-            int z = (id - GFX_WIRE_IO0_I) / 3, p = (id - GFX_WIRE_IO0_I) % 3; // I, O, T
-            float x1, y1, x2, y2;
-            pad_box(loc, z, x1, y1, x2, y2);
-            float off = (p == 0 ? -0.06 : p == 1 ? 0.06 : 0);
-            switch (io_side(loc)) {
-            case 'T':
-                return point((x1 + x2) / 2 + off, y2);
-            case 'B':
-                return point((x1 + x2) / 2 + off, y1);
-            case 'L':
-                return point(x2, (y1 + y2) / 2 + off);
-            default:
-                return point(x1, (y1 + y2) / 2 + off);
+                return htrack(trk(t), -1 + sm_hi(m), sm_lo(m));
             }
         }
         switch (id) {
-        case GFX_WIRE_LH:
-            if (loc.x == 0)
-                return htrack(0.27, 0.40, 1.0);
-            return htrack(0.27, 0.0, loc.x == w - 1 ? 0.62 : 1.0);
-        case GFX_WIRE_LV0:
-        case GFX_WIRE_LV1: {
-            float x = id == GFX_WIRE_LV0 ? LV0_X : LV1_X;
-            if (loc.y == 0)
-                return vtrack(x, 0.40, 1.0);
-            return vtrack(x, 0.0, loc.y == LAST ? 0.62 : 1.0);
-        }
+        case GFX_WIRE_LH: // über das Routing-Feld bis über den Randkanal rechts
+            return htrack(0.27, 0.0, loc.x == LAST ? 0.33 : 1.0);
+        case GFX_WIRE_LV0: // ... bzw. unten
+        case GFX_WIRE_LV1:
+            return vtrack(id == GFX_WIRE_LV0 ? LV0_X : LV1_X, 0.0, loc.y == LAST ? 0.33 : 1.0);
         case GFX_WIRE_GCLK_SRC: // P9 oben links -> GCLK-Leitung in der CLB darunter
             return point(0.33, 1.0);
         case GFX_WIRE_ACLK_SRC: // P43 unten rechts -> ACLK-Leitung in der CLB links oberhalb
@@ -699,36 +651,96 @@ struct Xc2064Impl : HimbaechelAPI
         return Geom{};
     }
 
-    // Anschluss eines Pad-Pins (z: Pad, p: 0 = I, 1 = O): ein Stück vom Pad weg auf eine eigene
-    // Querleitung, die die erreichbaren Spuren und Long Lines kreuzt. horiz: Pads oben/unten, die
-    // Querleitung liegt waagerecht bei y = at; sonst senkrecht bei x = at. lo..hi: ihre Ausdehnung.
-    struct PadLine
+    // --- IOB-Geometrie ---
+    // Ein IOB hängt wie im Original am Kanalstück parallel zum Rand: oben/unten am waagerechten Kanal
+    // über der ersten bzw. unter der letzten CLB-Zeile, links/rechts am senkrechten Kanal der ersten bzw.
+    // letzten Spalte. Ein Kanalstück neben einer CLB trägt bis zu zwei IOBs: das erste Pad seiner
+    // Kachel (z = 0) in der ersten Hälfte, das zweite Pad der folgenden Kachel (z = 1) in der zweiten.
+    // Koordinaten: r entlang des Rands ab dem Anfang des IOB, d vom Chiprand nach innen. Aufbau wie im
+    // Datenblatt, von außen nach innen: Pad; Ausgangstreiber (Dreieck zum Pad) und Eingangstreiber
+    // (Dreieck nach innen); Multiplexer für den Ausgang (Bel-Pin I, im Datenblatt "O") und das Tristate
+    // T; dann laufen die Leitungen von Ausgang, T und Eingang (Bel-Pin O, im Datenblatt "I") quer über
+    // das Kanalstück. Am rechten Rand kommen X und Y der CLB links direkt in den Ausgangsmultiplexer.
+    static constexpr float IOB_U0 = 0.385, IOB_DU = 0.30, IOB_W = 0.27; // Lage am Kanalstück, Breite
+    static constexpr float IOB_D0 = 0.18, IOB_D1 = 0.58;                 // Rahmen
+    static constexpr float PAD_R = 0.135, PAD_HW = 0.04, PAD_D0 = 0.03, PAD_D1 = 0.11, JCT_D = 0.22;
+    static constexpr float OB_R = 0.07, OB_TIP = 0.28, OB_BASE = 0.36;  // Ausgangstreiber
+    static constexpr float IB_R = 0.235, IB_BASE = 0.26, IB_TIP = 0.34; // Eingangstreiber
+    static constexpr float OM_R0 = 0.012, OM_R1 = 0.13, TM_R0 = 0.15, TM_R1 = 0.20; // Multiplexer
+    static constexpr float MX_D0 = 0.44, OM_D1 = 0.52, TM_D1 = 0.50, EN_D = 0.32;
+    static constexpr float O_R = 0.07, T_R = 0.175, I_R = IB_R; // Leitungen über den Kanal
+    static constexpr float DX_R = 0.0265, DY_R = 0.115;         // X, Y direkt (rechter Rand)
+
+    struct Iob
     {
-        bool horiz;
-        float px, py, at, lo, hi;
+        char side;
+        float u0;  // Anfang entlang des Rands, in der eigenen Kachel
+        float off; // oben/links liegt der Kanal in der Nachbarkachel: IOB näher an ihn heran
     };
-    PadLine pad_line(Loc loc, int z, int p) const
+    static Iob iob(Loc loc, int z)
     {
-        Geom pin = geom(loc, GFX_WIRE_IO0_I + 3 * z + p);
         char s = io_side(loc);
-        bool horiz = s == 'T' || s == 'B';
-        // gestaffelt nach dem Kanal: das zweite Pad am nächsten Kanal liegt weiter außen, damit es sich
-        // nicht mit dem ersten Pad der Nachbarkachel überdeckt (am Rand nutzt es den eigenen Kanal)
-        int idx = horiz ? loc.x : loc.y, slot = (z == 1 && idx < LAST) ? 1 : 0;
-        float off = (0.025f + 0.015f * p + 0.03f * slot) * (s == 'T' || s == 'L' ? 1 : -1);
-        PadLine pl{horiz, pin.x, pin.y, (horiz ? pin.y : pin.x) + off, horiz ? pin.x : pin.y, 0};
-        pl.hi = pl.lo;
-        auto add = [&pl](float v) { pl.lo = std::min(pl.lo, v), pl.hi = std::max(pl.hi, v); };
-        for (int t = 0; t < 4; t++) {
-            Geom tr = geom(loc, GFX_WIRE_IO0_T00 + 4 * z + t);
-            add(horiz ? tr.x : tr.y);
-        }
-        if (horiz)
-            add(LV0_X), add(LV1_X);
-        else
-            add(0.27); // LH
-        return pl;
+        return Iob{s, z ? IOB_U0 + IOB_DU - 1 : IOB_U0, (s == 'T' || s == 'L') ? 0.30f : 0.0f};
     }
+    // Punkt im IOB (d ohne Versatz) in Kachel-Koordinaten; Lagen im Kanal vorher um b.off verringern
+    static std::pair<float, float> iob_pt(const Iob &b, float r, float d)
+    {
+        float u = b.u0 + r;
+        d += b.off;
+        switch (b.side) {
+        case 'T':
+            return {u, d};
+        case 'B':
+            return {u, 1 - d};
+        case 'L':
+            return {d, u};
+        default:
+            return {1 - d, u};
+        }
+    }
+    void iob_line(std::vector<GraphicElement> &g, GraphicElement::style_t style, Loc loc, const Iob &b,
+                  std::initializer_list<std::pair<float, float>> rd) const
+    {
+        bool first = true;
+        std::pair<float, float> prev;
+        for (auto &p : rd) {
+            auto q = iob_pt(b, p.first, p.second);
+            if (!first)
+                line(g, style, loc.x + prev.first, loc.y + prev.second, loc.x + q.first, loc.y + q.second);
+            prev = q, first = false;
+        }
+    }
+    void iob_box(std::vector<GraphicElement> &g, GraphicElement::style_t style, Loc loc, const Iob &b, float r0,
+                 float d0, float r1, float d1) const
+    {
+        auto a = iob_pt(b, r0, d0), c = iob_pt(b, r1, d1);
+        box(g, style, loc.x + std::min(a.first, c.first), loc.y + std::min(a.second, c.second),
+            loc.x + std::max(a.first, c.first), loc.y + std::max(a.second, c.second));
+    }
+    // Multiplexer: Eingänge auf der Seite zum Kanal (d1), Ausgang zum Pad (d0)
+    void iob_mux(std::vector<GraphicElement> &g, GraphicElement::style_t style, Loc loc, const Iob &b, float r0,
+                 float r1, float d0, float d1) const
+    {
+        const float sl = 0.01;
+        iob_line(g, style, loc, b, {{r0, d1}, {r1, d1}, {r1 - sl, d0}, {r0 + sl, d0}, {r0, d1}});
+    }
+    void iob_dot(std::vector<GraphicElement> &g, GraphicElement::style_t style, Loc loc, const Iob &b, float r,
+                 float d) const
+    {
+        auto q = iob_pt(b, r, d);
+        dot(g, style, loc, q.first, q.second);
+    }
+    // Lage der Spuren und Long Lines des Randkanalstücks und Ende der Leitungen dahinter
+    static float iob_track_d(char s, int t) { return (s == 'T' || s == 'L') ? 1 + trk(t) : 1 - trk(t); }
+    static float iob_long_d(char s, int32_t id)
+    {
+        float v = id == GFX_WIRE_LV1 ? LV1_X : 0.27; // LH und LV0 bei 0.27
+        return (s == 'T' || s == 'L') ? 1 + v : 1 - v;
+    }
+    static float iob_end_d(char s) { return s == 'T' ? 1.28f : s == 'L' ? 1.305f : 0.97f; }
+    bool has_iob(char side, int seg, int z) const { return iob_slots.count({side, seg, z}) > 0; }
+    // CLB der letzten Spalte mit IOB rechts daneben, das X und Y direkt nimmt
+    bool right_iob(Loc loc) const { return loc.x == ctx->getGridDimX() - 2 && has_iob('R', loc.y, 0); }
 
     void drawGroup(std::vector<GraphicElement> &g, GroupId group, Loc loc) override
     {
@@ -770,10 +782,18 @@ struct Xc2064Impl : HimbaechelAPI
             poly(g, style, loc, {{FF_X0, cy - 0.008}, {FF_X0 + 0.012, cy}, {FF_X0, cy + 0.008}});
             break;
         }
-        case id_IOB.index: {
-            float x1, y1, x2, y2;
-            pad_box(loc, loc.z, x1, y1, x2, y2);
-            box(g, style, x + x1, y + y1, x + x2, y + y2);
+        case id_IOB.index: { // Rahmen, Pad, Ausgangstreiber (zum Pad) und Eingangstreiber (nach innen)
+            Iob b = iob(loc, loc.z);
+            const float ow = 0.03, iw = 0.025;
+            iob_line(g, style, loc, b, {{0, IOB_D0}, {IOB_W, IOB_D0}, {IOB_W, IOB_D1}, {0, IOB_D1}, {0, IOB_D0}});
+            iob_box(g, style, loc, b, PAD_R - PAD_HW, PAD_D0, PAD_R + PAD_HW, PAD_D1);
+            iob_line(g, style, loc, b, {{PAD_R, PAD_D1}, {PAD_R, JCT_D}});
+            iob_line(g, style, loc, b, {{OB_R, OB_TIP}, {OB_R, JCT_D}, {IB_R, JCT_D}, {IB_R, IB_BASE}});
+            iob_dot(g, style, loc, b, PAD_R, JCT_D);
+            iob_line(g, style, loc, b,
+                     {{OB_R - ow, OB_BASE}, {OB_R + ow, OB_BASE}, {OB_R, OB_TIP}, {OB_R - ow, OB_BASE}});
+            iob_line(g, style, loc, b,
+                     {{IB_R - iw, IB_BASE}, {IB_R + iw, IB_BASE}, {IB_R, IB_TIP}, {IB_R - iw, IB_BASE}});
             break;
         }
         case id_GND_DRV.index:
@@ -793,8 +813,9 @@ struct Xc2064Impl : HimbaechelAPI
             float ox = mux_x(m) + MUX_W, oy = mux_out_y(m);
             draw_mux(g, style, loc, mux_x(m), m.y_top, ox, mux_bot(m));
             switch (m.out) {
-            case GFX_WIRE_X: // durch den Kanal rechts bis zur Long Line, Direktleitungen hinauf und hinab
-                poly(g, style, loc, {{ox, oy}, {1 + LV0_X + 0.01, oy}});
+            case GFX_WIRE_X: // durch den Kanal rechts bis zur Long Line (am Rand ins IOB), Direktleitungen
+                poly(g, style, loc,
+                     {{ox, oy}, {right_iob(loc) ? 2 - OM_D1 : 1 + LV0_X + 0.01, oy}});
                 if (loc.y > 1) { // zu D und C der CLB darüber
                     poly(g, style, loc,
                          {{X_UP_X, oy}, {X_UP_X, XB_C_Y - 1}, {DIR_X, XB_C_Y - 1}, {DIR_X, C_ROW - 1}});
@@ -814,7 +835,7 @@ struct Xc2064Impl : HimbaechelAPI
                 if (loc.x < ctx->getGridDimX() - 2)
                     poly(g, style, loc, {{ox, oy}, {1 + YL_X, oy}, {1 + YL_X, B_ROW}});
                 else
-                    poly(g, style, loc, {{ox, oy}, {1 + LV1_X + 0.01, oy}});
+                    poly(g, style, loc, {{ox, oy}, {right_iob(loc) ? 2 - OM_D1 : 1 + LV1_X + 0.01, oy}});
                 break;
             case GFX_WIRE_FF_S: // Set von oben
                 poly(g, style, loc, {{ox, oy}, {FF_PIN_X, oy}, {FF_PIN_X, FF_Y0}});
@@ -900,38 +921,29 @@ struct Xc2064Impl : HimbaechelAPI
             return;
         }
 
-        // Pad-Pin: Markierung am Pad, eigene Querleitung über die erreichbaren Spuren und Long Lines
+        // IOB: Multiplexer und Leitungen der Pins über das Randkanalstück
         if (tilewire >= GFX_WIRE_IO0_I && tilewire <= GFX_WIRE_IO1_T) {
-            int z = (tilewire - GFX_WIRE_IO0_I) / 3, p = (tilewire - GFX_WIRE_IO0_I) % 3;
-            Geom pin = geom(loc, tilewire);
-            poly(g, style, loc, {{pin.x - 0.008, pin.y}, {pin.x + 0.008, pin.y}});
-            poly(g, style, loc, {{pin.x, pin.y - 0.008}, {pin.x, pin.y + 0.008}});
-            if (p == 2)
-                return; // T: nur GND/VCC
-            PadLine pl = pad_line(loc, z, p);
-            if (pl.horiz) {
-                poly(g, style, loc, {{pl.px, pl.py}, {pl.px, pl.at}});
-                poly(g, style, loc, {{pl.lo, pl.at}, {pl.hi, pl.at}});
-                if (pl.px > pl.lo && pl.px < pl.hi)
-                    dot(g, style, loc, pl.px, pl.at);
-            } else {
-                poly(g, style, loc, {{pl.px, pl.py}, {pl.at, pl.py}});
-                poly(g, style, loc, {{pl.at, pl.lo}, {pl.at, pl.hi}});
-                if (pl.py > pl.lo && pl.py < pl.hi)
-                    dot(g, style, loc, pl.at, pl.py);
-            }
-            // Taktpuffer: P9 speist GCLK, P43 ACLK (Pads oben bzw. unten, Querleitung waagerecht)
-            for (int c = 0; c < 2 && p == 1; c++) {
-                Loc cl = ctx->getBelLocation(clock_pads[c]);
-                if (cl.x != loc.x || cl.y != loc.y || cl.z != z)
-                    continue;
-                Geom tp = geom(loc, c ? GFX_WIRE_ACLK_SRC : GFX_WIRE_GCLK_SRC);
-                if (tp.x >= pl.lo && tp.x <= pl.hi) {
-                    poly(g, style, loc, {{tp.x, pl.at}, {tp.x, tp.y}});
-                    dot(g, style, loc, tp.x, pl.at);
-                } else { // über den Kanal hinweg zur Taktleitung der CLB daneben
-                    poly(g, style, loc, {{YL_X, pl.at}, {YL_X, XT_A_Y}, {tp.x, XT_A_Y}, {tp.x, tp.y}});
-                    dot(g, style, loc, YL_X, pl.at);
+            int z = (tilewire - GFX_WIRE_IO0_I) / 3, p = (tilewire - GFX_WIRE_IO0_I) % 3; // I, O, T
+            Iob b = iob(loc, z);
+            float de = iob_end_d(b.side) - b.off;
+            if (p == 0) { // Ausgang zum Pad: Multiplexer -> Ausgangstreiber
+                iob_mux(g, style, loc, b, OM_R0, OM_R1, MX_D0, OM_D1);
+                iob_line(g, style, loc, b, {{O_R, de}, {O_R, OM_D1}});
+                iob_line(g, style, loc, b, {{O_R, MX_D0}, {O_R, OB_BASE}});
+            } else if (p == 2) { // Tristate: Multiplexer -> Freigabe des Ausgangstreibers
+                iob_mux(g, style, loc, b, TM_R0, TM_R1, MX_D0, TM_D1);
+                iob_line(g, style, loc, b, {{T_R, de}, {T_R, TM_D1}});
+                iob_line(g, style, loc, b, {{T_R, MX_D0}, {T_R, EN_D}, {OB_R + 0.015, EN_D}});
+            } else { // Eingang vom Pad: Eingangstreiber -> über den Kanal
+                iob_line(g, style, loc, b, {{I_R, IB_TIP}, {I_R, de}});
+                for (int c = 0; c < 2; c++) { // Taktpuffer: P9 (oben) speist GCLK, P43 (unten) ACLK
+                    Loc cl = ctx->getBelLocation(clock_pads[c]);
+                    if (cl.x != loc.x || cl.y != loc.y || cl.z != z)
+                        continue;
+                    Geom tp = geom(loc, c ? GFX_WIRE_ACLK_SRC : GFX_WIRE_GCLK_SRC);
+                    float bd = (b.side == 'T' ? 0.97f : 0.67f) - b.off, tr = tp.x - b.u0; // Taktleitung bei d = 1
+                    iob_line(g, style, loc, b, {{I_R, bd}, {tr, bd}, {tr, 1 - b.off}});
+                    iob_dot(g, style, loc, b, I_R, bd);
                 }
             }
             return;
@@ -939,25 +951,18 @@ struct Xc2064Impl : HimbaechelAPI
 
         // Routing und IO
         if (is_sm_pin(tilewire)) {
-            // Segmente zeichnet ihr Anfang (E bzw. S); N/W nur als Kanalstück zu den Pads am Rand.
-            // Kanalstücke am Rand ohne Pad führen nirgendwohin und werden nicht gezeichnet.
+            // Segmente zeichnet ihr Anfang (E bzw. S). Am Rand enden die Matrizen (wie im Original).
             int mm, side, t;
             sm_pin(tilewire, mm, side, t);
-            if (side == 0 && (loc.y != 1 || !pad_stubs.count({'T', loc.x})))
-                return;
-            if (side == 3 && (loc.x != 1 || !pad_stubs.count({'L', loc.y})))
-                return;
-            if (side == 1 && loc.x == LAST && !pad_stubs.count({'R', loc.y}))
-                return;
-            if (side == 2 && loc.y == LAST && !pad_stubs.count({'B', loc.x}))
+            if (side == 0 || side == 3 || (side == 1 && loc.x == LAST) || (side == 2 && loc.y == LAST))
                 return;
         } else if ((tilewire >= GFX_WIRE_BOT00 && tilewire <= GFX_WIRE_RGT11) ||
-                   (tilewire >= GFX_WIRE_IO0_T00 && tilewire <= GFX_WIRE_IO1_T11)) {
+                   (tilewire >= GFX_WIRE_IO0_T00 && tilewire <= GFX_WIRE_IO1_T11) || tilewire == GFX_WIRE_IO0_X ||
+                   tilewire == GFX_WIRE_IO0_Y) {
             return; // Teil eines Knotens, den eine andere Kachel zeichnet
-        } else if (tilewire == GFX_WIRE_LH && loc.y == 0) {
-            return;
-        } else if ((tilewire == GFX_WIRE_LV0 || tilewire == GFX_WIRE_LV1) && loc.x == 0) {
-            return;
+        } else if ((tilewire == GFX_WIRE_LH || tilewire == GFX_WIRE_LV0 || tilewire == GFX_WIRE_LV1) &&
+                   (loc.x == 0 || loc.y == 0)) {
+            return; // Zugang der Pads oben/links zur Long Line des Randkanals
         }
         Geom gm = geom(loc, tilewire);
         switch (gm.kind) {
@@ -1075,24 +1080,27 @@ struct Xc2064Impl : HimbaechelAPI
             return;
         }
 
-        // IO-Kacheln: Kästchen auf der Querleitung des Pad-Pins, wo sie Spur bzw. Long Line kreuzt;
-        // Taktpuffer: Kästchen am Anfang der Taktleitung
+        // IOB: Kästchen, wo die Leitung eines Pins Spur, Long Line oder X/Y trifft; Taktpuffer
         int32_t pin = (src_id >= GFX_WIRE_IO0_I && src_id <= GFX_WIRE_IO1_T) ? src_id : dst_id;
         if (pin < GFX_WIRE_IO0_I || pin > GFX_WIRE_IO1_T)
             return;
         int z = (pin - GFX_WIRE_IO0_I) / 3, p = (pin - GFX_WIRE_IO0_I) % 3;
-        Geom o = geom(loc, pin == src_id ? dst_id : src_id);
-        if (o.kind == G_NONE || p == 2)
+        int32_t other = pin == src_id ? dst_id : src_id;
+        Iob b = iob(loc, z);
+        float r = p == 0 ? O_R : p == 1 ? I_R : T_R, d;
+        if (other >= GFX_WIRE_IO0_T00 && other <= GFX_WIRE_IO1_T11) {
+            d = iob_track_d(b.side, (other - GFX_WIRE_IO0_T00) % 4) - b.off;
+        } else if (other == GFX_WIRE_LH || other == GFX_WIRE_LV0 || other == GFX_WIRE_LV1) {
+            d = iob_long_d(b.side, other) - b.off;
+        } else if (other == GFX_WIRE_IO0_X || other == GFX_WIRE_IO0_Y) {
+            r = other == GFX_WIRE_IO0_X ? DX_R : DY_R, d = OM_D1 + 0.012;
+        } else if (other == GFX_WIRE_GCLK_SRC || other == GFX_WIRE_ACLK_SRC) {
+            r = geom(loc, other).x - b.u0, d = 0.985f - b.off;
+        } else {
             return; // Konstanten GND/VCC
-        if (o.kind == G_POINT) {
-            pip_box(g, style, loc, o.x, o.y + (o.y > 0.5 ? -0.03 : 0.03));
-            return;
         }
-        PadLine pl = pad_line(loc, z, p);
-        if (pl.horiz)
-            pip_box(g, style, loc, o.x, pl.at);
-        else
-            pip_box(g, style, loc, pl.at, o.y);
+        auto q = iob_pt(b, r, d);
+        pip_box(g, style, loc, q.first, q.second);
     }
 };
 

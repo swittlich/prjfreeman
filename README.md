@@ -26,7 +26,7 @@ Grundlagen:
 | Direktverbindungen | X → C/D der CLB darüber und A/B der CLB darunter, Y → B der CLB rechts | Datenblatt, Abschnitt *Direct Interconnect* |
 | Long Lines | 1 horizontale je Zeile, 2 vertikale je Spalte (auch Zeile/Spalte I am Rand), bis zu den Pads | Datenblatt, Abschnitt *Longlines* |
 | Taktnetze | K aus **GCLK** (Pin P9, oben links) oder **ACLK** (Pin P43, unten rechts) | Lage der Puffer laut Datenblatt, Zuordnung zu P9/P43 angenommen |
-| IOBs | **58 Pads mit PLCC68-Namen** (Bel `P9` usw.), je am Kanalstück zwischen Pad und nächster Switch-Matrix, dazu an der Long Line ihrer Zeile/Spalte. Eingang O, Ausgang I, Tristate T | `iob.js`; Ein-/Ausgang gelatcht nicht modelliert |
+| IOBs | **58 Pads mit PLCC68-Namen** (Bel `P9` usw.) am Kanalstück **parallel zum Rand** neben einer Rand-CLB: das erste Pad einer Kachel am eigenen Stück, das zweite am vorherigen, je bis zu zwei IOBs pro Stück. Ausgang zum Pad (Bel-Pin I, im Datenblatt „O“) aus den 4 Spuren und der Long Line des Randkanals, Tristate T aus den 4 Spuren oder fest, Eingang vom Pad (Bel-Pin O) auf Spuren und Long Line. Am rechten Rand nimmt das erste Pad X und Y der CLB links direkt | `iob.js`; Datenblatt, Abschnitt *Direct Interconnect*. Gelatchte Ein-/Ausgänge und die übrigen Direktverbindungen (links, oben, unten) nicht modelliert |
 | Timing | LUT3 15 ns, LUT4 18 ns, FF 10 ns Clock-to-Q / 8 ns Setup, Pass-Transistor 2,5 ns | Größenordnung XC2064-70 |
 
 Nicht modelliert: der Mux-Modus „FGM“ (zwei unabhängige 3-Variablen-Funktionen, B wählt) und
@@ -84,7 +84,15 @@ in die LUTs und das Flipflop verfolgen lässt. Mit der Maus über einem Pip zeig
 
 Die Ausrichtung folgt Datenblatt und Die-Fotos: X0Y0 oben links. In den Kacheln X1Y1…X9Y9 sitzen oben
 links die Switch-Matrizen SM0/SM1 (die Diagonalen darin sind ihre Pips), rechts davon bzw. darunter die
-Kanäle (2 Spuren pro Matrix). Dünne Linien sind die Long Lines und die beiden Taktnetze.
+Kanäle (2 Spuren pro Matrix). Dünne Linien sind die Long Lines und die beiden Taktnetze. Am Rand
+enden die Switch-Matrizen, die Kanäle laufen dort nur parallel zum Rand weiter.
+
+Die IOBs sind wie im Datenblatt gezeichnet: außen das Pad, im Rahmen der Ausgangstreiber (Dreieck zum
+Pad) mit seinem Multiplexer und dem kleineren Multiplexer für das Tristate, daneben der Eingangstreiber
+(Dreieck nach innen). Ausgang, Tristate und Eingang laufen als drei Leitungen quer über das
+Randkanalstück, PIP-Kästchen zeigen, an welchen Spuren und Long Lines sie geschaltet werden können. Am
+rechten Rand laufen X und Y der CLB links durch den Kanal in den Ausgangsmultiplexer des IOB. P9 und
+P43 führen ihren Eingang außerdem zum Taktpuffer von GCLK bzw. ACLK.
 
 Eine CLB (grauer Rahmen) folgt dem Blockschaltbild im Datenblatt, von links nach rechts:
 
@@ -121,6 +129,8 @@ Benutztes immer obenauf.
 - **Mux-Modus FGM** (B wählt zwischen zwei unabhängigen 3-Variablen-Funktionen) als eigener Bel-Modus.
 - **CLB-Eingänge A–D** mit allen Quellen des Originals (laut `clb.js` 6–10 je Eingang).
 - **Gelatchte IOB-Eingänge** mit den vier IOB-Taktmultiplexern (`iob.js`).
+- **Übrige Direktverbindungen der IOBs**: Eingang vom Pad zu B der CLB am linken Rand, oben und unten
+  in beide Richtungen (Datenblatt, `iob.js`).
 - **Echter Bitstream**: [`XC2064-def.txt`](https://github.com/shirriff/xc2064) beschreibt alle 11.360
   Konfigurationsbits (LUT-Inhalte, IOB-Optionen, PIPs). Für ladbare Bitstreams müssten die PIPs des
   Modells genau den PIPs des Originals entsprechen. Dafür muss man den Routing-Graphen aus diesen Daten
