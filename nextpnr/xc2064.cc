@@ -194,11 +194,12 @@ struct Xc2064Impl : HimbaechelAPI
         }
     }
 
-    void pack() override
+    // Pins aus PCF bzw. (* LOC="P9" *) am XC2000_INBUF/XC2000_OUTBUF: das IOB schon beim Packen fest
+    // belegen (wie GateMate), damit die GUI nach "Pack" die belegten Pads zeigt. Ein BEL-Attribut
+    // bleibt dabei weg, sonst würde der Placer die Zelle ein zweites Mal binden wollen.
+    void bind_constrained_pads()
     {
-        if (ctx->args.options.count("pcf"))
-            read_pcf(ctx->args.options.at("pcf").as<std::string>());
-        // (* LOC="P9" *) an XC2000_INBUF/XC2000_OUTBUF: Pad nach PLCC68-Pin wählen
+        int bound = 0;
         for (auto &cell : ctx->cells) {
             CellInfo *ci = cell.second.get();
             auto loc = ci->attrs.find(id_LOC);
@@ -208,23 +209,36 @@ struct Xc2064Impl : HimbaechelAPI
             if (!pad_bels.count(pin))
                 log_error("%s: LOC \"%s\" ist kein XC2064-Pad (PLCC68: P2..P68)\n", ci->name.c_str(ctx),
                           pin.c_str(ctx));
-            ci->attrs[id_BEL] = std::string(ctx->getBelName(pad_bels.at(pin)).str(ctx));
+            BelId bel = pad_bels.at(pin);
+            if (!ctx->checkBelAvail(bel))
+                log_error("%s: Pad %s ist schon mit %s belegt\n", ci->name.c_str(ctx), pin.c_str(ctx),
+                          ctx->nameOf(ctx->getBoundBelCell(bel)));
+            ci->attrs.erase(id_BEL);
+            ctx->bindBel(bel, ci, STRENGTH_FIXED);
+            bound++;
         }
+        log_info("Placed %d IO buffers at their constrained pads.\n", bound);
+    }
+
+    void pack() override
+    {
+        if (ctx->args.options.count("pcf"))
+            read_pcf(ctx->args.options.at("pcf").as<std::string>());
         // IO-Puffer setzt die Synthese (synth_xc2064) ein
         const pool<CellTypePort> top_ports{
                 CellTypePort(id_XC2000_INBUF, id_PAD),
                 CellTypePort(id_XC2000_OUTBUF, id_PAD),
         };
         h.remove_nextpnr_iobs(top_ports);
+        bind_constrained_pads();
         h.replace_constants(CellTypePort(id_VCC_DRV, id_VCC), CellTypePort(id_GND_DRV, id_GND), {}, {}, id_VCC,
                             id_GND);
         int moved = route_q_feedback_to_i2();
         // Das FF bekommt seine Daten nur aus F bzw. FG derselben CLB. synth_xc2064 sorgt dafür, dass
         // jedes FF einen eigenen LUT hat; LUT und FF werden hier als Cluster gemeinsam platziert.
-        int n3 = h.constrain_cell_pairs(pool<CellTypePort>{{id_XC2000_LUT3, id_O}}, pool<CellTypePort>{{id_XC2000_DFF, id_D}},
-                                        Z_FF - Z_F);
-        int n4 = h.constrain_cell_pairs(pool<CellTypePort>{{id_XC2000_LUT4, id_O}}, pool<CellTypePort>{{id_XC2000_DFF, id_D}},
-                                        Z_FF - Z_FG);
+        const pool<CellTypePort> ff_d{{id_XC2000_DFF, id_D}};
+        int n3 = h.constrain_cell_pairs(pool<CellTypePort>{{id_XC2000_LUT3, id_O}}, ff_d, Z_FF - Z_F);
+        int n4 = h.constrain_cell_pairs(pool<CellTypePort>{{id_XC2000_LUT4, id_O}}, ff_d, Z_FF - Z_FG);
         log_info("Constrained %d LUT3/FF and %d LUT4/FF pairs, %d Q feedback inputs moved to I[2].\n", n3, n4,
                  moved);
     }

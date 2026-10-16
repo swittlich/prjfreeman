@@ -54,7 +54,9 @@ Pins stehen in einer **PCF-Datei** wie bei iCE40 (`set_io [-nowarn] <Port> <Pin>
 `leds[0]`, Pins als PLCC68-Namen P2…P68), die nextpnr mit `--vopt pcf=<Datei>` liest. `flow.sh` nimmt
 `design.pcf` neben `design.v` automatisch, `PCF=…` wählt eine andere. Ohne Eintrag entscheidet der
 Placer. Alternativ geht weiterhin `(* LOC="P9" *)` an einem `XC2000_INBUF`/`XC2000_OUTBUF` im
-Verilog, die PCF-Datei hat Vorrang. `pack()` setzt daraus das BEL-Attribut.
+Verilog, die PCF-Datei hat Vorrang. `pack()` belegt diese Pads schon beim Packen fest (wie GateMate),
+die GUI zeigt sie also direkt nach „Pack“ als belegt. Ein BEL-Attribut setzt es dabei nicht, sonst würde
+der Placer die Zellen ein zweites Mal binden wollen.
 
 yosys (`yosys/synth_xc2064.cc`):
 - `abc -lut 3:4` bewertet einen LUT4 mit den Kosten zweier LUT3.
