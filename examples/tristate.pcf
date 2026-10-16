@@ -1,0 +1,13 @@
+# Pin-Zuordnung für tristate.v: set_io <Port> <PLCC68-Pin>, alles am oberen Rand
+set_io clk     P9
+set_io oe_n    P8
+set_io en_n    P7
+set_io bus[0]  P6
+set_io bus[1]  P5
+set_io bus[2]  P4
+set_io bus[3]  P3
+set_io tout    P2
+set_io seen[0] P68
+set_io seen[1] P67
+set_io seen[2] P66
+set_io seen[3] P65

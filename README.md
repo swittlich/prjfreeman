@@ -26,7 +26,7 @@ Grundlagen:
 | Direktverbindungen | X → C/D der CLB darüber und A/B der CLB darunter, Y → B der CLB rechts | Datenblatt, Abschnitt *Direct Interconnect* |
 | Long Lines | 1 horizontale je Zeile, 2 vertikale je Spalte (auch Zeile/Spalte I am Rand), bis zu den Pads | Datenblatt, Abschnitt *Longlines* |
 | Taktnetze | K aus **GCLK** (Pin P9, oben links) oder **ACLK** (Pin P43, unten rechts) | Lage der Puffer laut Datenblatt, Zuordnung zu P9/P43 angenommen |
-| IOBs | **58 Pads mit PLCC68-Namen** (Bel `P9` usw.) am Kanalstück **parallel zum Rand** neben einer Rand-CLB: das erste Pad einer Kachel am eigenen Stück, das zweite am vorherigen, je bis zu zwei IOBs pro Stück. Ausgang zum Pad (Bel-Pin I, im Datenblatt „O“) aus den 4 Spuren und der Long Line des Randkanals, Tristate T aus den 4 Spuren oder fest, Eingang vom Pad (Bel-Pin O) auf Spuren und Long Line. Direktverbindungen mit der Rand-CLB: rechts nimmt das erste Pad X und Y; links treibt das zweite Pad B; oben treibt das erste Pad B und das zweite nimmt X; unten treibt das erste Pad C und D und das zweite nimmt X. Das IOB oben verhält sich damit wie eine CLB darüber, das unten wie eine darunter | `iob.js`; Datenblatt, Abschnitt *Direct Interconnect*. Gelatchte Ein-/Ausgänge nicht modelliert, am rechten Rand nimmt nur das erste Pad X/Y (laut `iob.js` auch das zweite) |
+| IOBs | **58 Pads mit PLCC68-Namen** (Bel `P9` usw.) am Kanalstück **parallel zum Rand** neben einer Rand-CLB: das erste Pad einer Kachel am eigenen Stück, das zweite am vorherigen, je bis zu zwei IOBs pro Stück. Ausgang zum Pad (Bel-Pin I, im Datenblatt „O“) aus den 4 Spuren und der Long Line des Randkanals, Tristate T (1 schaltet den Treiber ab) ebenfalls aus den 4 Spuren und der Long Line oder fest, Eingang vom Pad (Bel-Pin O) auf Spuren und Long Line. Der Ausgangstreiber ist an (`XC2000_OUTBUF`, T offen), aus (`XC2000_INBUF`) oder unter der Kontrolle von T (`XC2000_TOBUF`, `XC2000_IOBUF`), wie die zwei Konfigurationszellen im Datenblatt. Direktverbindungen mit der Rand-CLB: rechts nimmt das erste Pad X und Y; links treibt das zweite Pad B; oben treibt das erste Pad B und das zweite nimmt X; unten treibt das erste Pad C und D und das zweite nimmt X. Das IOB oben verhält sich damit wie eine CLB darüber, das unten wie eine darunter | `iob.js`; Datenblatt, Abschnitte *I/O Block* und *Direct Interconnect*. T hat im Original oben 2 lokale Leitungen und 2 Long Lines als Quellen. Gelatchte Ein-/Ausgänge nicht modelliert, am rechten Rand nimmt nur das erste Pad X/Y (laut `iob.js` auch das zweite) |
 | Timing | LUT3 15 ns, LUT4 18 ns, FF 10 ns Clock-to-Q / 8 ns Setup, Pass-Transistor 2,5 ns | Größenordnung XC2064-70 |
 
 Nicht modelliert: der Mux-Modus „FGM“ (zwei unabhängige 3-Variablen-Funktionen, B wählt) und
@@ -46,9 +46,11 @@ gelatchte IOBs.
 LUTs, tauscht `pack()` die Eingänge und permutiert INIT, damit die Q-Rückführung genutzt wird.
 
 Die Primitive heißen mit dem Familienpräfix `XC2000_` (wie `CC_` bei GateMate), damit sie sich nicht
-mit Zellen anderer Bibliotheken verwechseln lassen: `XC2000_LUT3`, `XC2000_LUT4`, `XC2000_DFF`,
-`XC2000_INBUF`, `XC2000_OUTBUF`. Die Bel-Typen in der Chip-Datenbank bleiben kurz (`LUT3`, `LUT4`,
-`DFF`, `IOB`), `getBelBucketForCellType()` ordnet sie zu. Zum Gegenstück in yosys siehe unten.
+mit Zellen anderer Bibliotheken verwechseln lassen: `XC2000_LUT3`, `XC2000_LUT4`, `XC2000_DFF` und die
+IO-Puffer `XC2000_INBUF`, `XC2000_OUTBUF`, `XC2000_TOBUF` (Tristate-Ausgang) und `XC2000_IOBUF`
+(bidirektional, wie `CC_TOBUF`/`CC_IOBUF` bei GateMate). Die Bel-Typen in der Chip-Datenbank bleiben
+kurz (`LUT3`, `LUT4`, `DFF`, `IOB`), `getBelBucketForCellType()` ordnet sie zu. Zum Gegenstück in
+yosys siehe unten.
 
 Pins stehen in einer **PCF-Datei** wie bei iCE40 (`set_io [-nowarn] <Port> <Pin>`, Busse als
 `leds[0]`, Pins als PLCC68-Namen P2…P68), die nextpnr mit `--vopt pcf=<Datei>` liest. `flow.sh` nimmt
@@ -56,12 +58,17 @@ Pins stehen in einer **PCF-Datei** wie bei iCE40 (`set_io [-nowarn] <Port> <Pin>
 Placer, nur Takte legt `pack()` selbst an die Taktpads: das Netz mit den meisten Speicherelementen an
 P9 (GCLK), das nächste an P43 (ACLK), soweit diese Pads frei sind. Nur von dort erreicht ein Takt K
 aller CLBs, sonst belegt er in jeder CLB mit Speicherelement einen der Eingänge A–D. Ein Takt, der per
-Constraint an einem anderen Pad liegt, bleibt dort (Hinweis im Log). Alternativ geht weiterhin `(* LOC="P9" *)` an einem `XC2000_INBUF`/`XC2000_OUTBUF` im
-Verilog, die PCF-Datei hat Vorrang. `pack()` belegt diese Pads schon beim Packen fest (wie GateMate),
+Constraint an einem anderen Pad liegt, bleibt dort (Hinweis im Log). Alternativ geht weiterhin
+`(* LOC="P9" *)` an einem IO-Puffer im Verilog, die PCF-Datei hat Vorrang. `pack()` belegt diese Pads schon beim Packen fest (wie GateMate),
 die GUI zeigt sie also direkt nach „Pack“ als belegt. Ein BEL-Attribut setzt es dabei nicht, sonst würde
 der Placer die Zellen ein zweites Mal binden wollen.
 
 yosys (`yosys/synth_xc2064.cc`):
+- Tristate wie bei GateMate: Nach dem Flatten macht `tribuf -logic` interne Tristate-Netze zu Logik,
+  `deminout` macht nur gelesene `inout`-Ports zu Eingängen. `iopadmap` setzt an Ports mit
+  Tristate-Treiber `XC2000_TOBUF` bzw. `XC2000_IOBUF` ein, und zwar vor dem LUT-Mapping. Dann geht der
+  Inverter (Enable in yosys, T = 1 schaltet ab) noch in einem LUT auf, und bei Low-aktivem Enable
+  verschwindet er ganz.
 - `abc -lut 3:4` bewertet einen LUT4 mit den Kosten zweier LUT3.
 - `dfflegalize` erlaubt FF und Latch mit beiden Taktpolaritäten und asynchronem Set/Reset.
 - Der Pass `xc2064_ffbuf` gibt jedem FF einen eigenen treibenden LUT.
@@ -74,8 +81,11 @@ wechseln sich zwei Netze an einem Draht ab, und router2 kommt nicht mehr zum End
 Abbruchlimit). `preRoute()` setzt den Rand deshalb auf die Chipgröße, wenn die Einstellungen
 `router2/bbMargin/x` und `/y` nicht schon gesetzt sind. Mit `--router router1` scheitern manche Seeds an
 Überlastung, die Option bleibt aber möglich. Auch mit dem großen Rand pendelt router2 bei manchen
-Platzierungen lange: Blinky mit PCF und Standard-Seed braucht rund 5300 Iterationen (eine Minute), die
-übrigen Läufe des Regressionstests unter 110. Die Spalte *Routing* des Tests zeigt das.
+Platzierungen lange (Blinky ohne PCF, Standard-Seed: rund 26.500 Iterationen, 40 s). Manche
+Platzierungen sind gar nicht routbar: Im Regressionstest laufen Blinky mit PCF und Seed 4 sowie Tristate
+mit PCF und Seed 3 in den Timeout. Für Blinky Seed 4 findet auch router1 für das Reset-Netz (16 Senken
+in 15 CLBs) keinen Weg. Der Placer kennt die Belegung der Kanäle nicht, und welche Seeds es trifft,
+ändert sich mit jedem Eingriff in den Routing-Graphen. Die Spalte *Routing* des Tests zeigt das.
 
 ## Ablauf
 
@@ -94,8 +104,9 @@ Ein schon geroutetes `*.pnr.json` lädt nextpnr in der GUI direkt. Auf der Komma
 
 | Beispiel | Inhalt | Ergebnis |
 |---|---|---|
-| `examples/blinky.v` | 16-Bit-Zähler, Pins in `blinky.pcf` (Takt an P9, alles am oberen Rand) | 20 LUT3, 7 LUT4, 16 FF, je nach Seed 4,9–6,2 MHz. Der nextpnr-Standard-Seed verfehlt das Ziel 5 MHz knapp (4,9 MHz), `flow.sh --seed 1` oder `SEED=1 arch/xc2064/flow.sh` schafft 6,0 MHz. Ohne PCF (`PCF=/dev/null`) legt `pack()` den Takt selbst an P9, je nach Seed 4,9–6,1 MHz. Der kritische Pfad sind die LUT-Ebenen der Zähler-Logik, eine Carry-Kette hatte erst der XC4000 |
+| `examples/blinky.v` | 16-Bit-Zähler, Pins in `blinky.pcf` (Takt an P9, alles am oberen Rand) | 20 LUT3, 7 LUT4, 16 FF, je nach Seed 5,6–6,3 MHz (Standard-Seed 5,6 MHz, `flow.sh --seed 1` oder `SEED=1 arch/xc2064/flow.sh` 6,0 MHz), Seed 4 routet nicht (siehe Routing). Ohne PCF (`PCF=/dev/null`) legt `pack()` den Takt selbst an P9, je nach Seed 5,5–6,1 MHz. Die Werte verschieben sich mit jeder Änderung am Routing-Graphen. Der kritische Pfad sind die LUT-Ebenen der Zähler-Logik, eine Carry-Kette hatte erst der XC4000 |
 | `examples/latch_sr.v` | FF mit fallender Flanke, FF mit asynchronem Set/Reset, Latch, Pins in `latch_sr.pcf` | 3 Speicherelemente mit `CLKINV`, `S`/`R` bzw. `LATCH`. Ohne PCF kommt `clk` an P9 und das Latch-Enable `en` an P43 |
+| `examples/tristate.v` | 4-Bit-Bus (`inout`) mit Low-aktivem `oe_n`, Tristate-Ausgang `tout` mit `en_n`, Pins in `tristate.pcf` (alles am oberen Rand) | 4 `XC2000_IOBUF`, 1 `XC2000_TOBUF`, 7 LUT3, 1 LUT4, 8 FF, 19–22 MHz, Seed 3 mit PCF routet nicht. T aller Bus-Bits hängt ohne Logik am Pad von `oe_n` und läuft über die Long Line des oberen Randkanals. Mit High-aktivem Enable (Inverter in einer CLB, deren Ausgänge die waagerechten Long Lines nicht erreichen, also nur über die Spuren zu den T) war der Bus dort nicht routbar |
 
 In VS Code laufen die allgemeinen Tasks *Arch: Flow ausführen* und *Arch: Flow mit nextpnr-GUI* sowie
 die Debug-Konfigurationen für Architekturen (Run and Debug). Als Namen jeweils `xc2064` eingeben.
@@ -119,6 +130,14 @@ beweist die Gleichheit für alle Eingangsfolgen. Als Modelle dienen `yosys/cells
 Konstanten-Zellen, die erst nextpnr anlegt, `test/pnr_cells.v`. Ein verändertes INIT-Bit, vertauschte
 LUT-Eingänge, ein umgedrehtes `CLKINV`, ein FF statt Latch, ein gelöster Pip oder ein LUT-Eingang an
 der falschen Quelle fallen jeweils auf.
+
+Den hochohmigen Zustand kennt der Vergleich nicht. `test/tristate_split.py` bereitet beide Netzlisten
+deshalb auf: Jeder Tristate-Treiber wird ein Multiplexer mit fester 0 bzw. 1 statt Z, und der Vergleich
+läuft für beide Werte. Treibt eine Netzliste, wo die andere hochohmig ist, fällt das in einem der beiden
+Läufe auf. Jeder `inout`-Port wird ein Ausgang, und was ihn liest, liest stattdessen einen neuen Eingang
+`<Port>$ext`, also den Wert, den die Außenwelt anlegt. So ist auch der Lesepfad über O geprüft. Ein T am
+falschen Netz, vertauschte I oder O zweier Bus-Bits, vertauschtes T und I oder ein Tristate-Ausgang ohne
+T fallen jeweils auf.
 
 Für den Bitstream ist die Spalte *Pips* die spätere Gegenprobe: Ein Leser, der Bels und Pips aus der
 RBT-Datei zurückgewinnt, kann dieselbe Netzliste schreiben und denselben Vergleich durchlaufen.

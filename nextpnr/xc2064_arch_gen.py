@@ -21,9 +21,8 @@
 #     Switch-Matrix:  2 je Kreuzung, 8 Pins (2 je Seite), jeder Pin mit 5 der 7 anderen verbindbar
 #     IOBs:           wie im Original (Shirriffs iob.js) am Kanalstück parallel zum Rand neben einer
 #                     Rand-CLB: das erste Pad einer Kachel am eigenen Stück, das zweite am vorherigen.
-#                     Ausgang zum Pad (Bel-Pin I) und Tristate T wählen aus den 4 Spuren (I auch aus der
-#                     Long Line des Randkanals), der Eingang vom Pad (Bel-Pin O) treibt Spuren und Long
-#                     Line. Direktverbindungen (Datenblatt "Direct Interconnect", iob.js): rechts nimmt
+#                     Ausgang zum Pad (Bel-Pin I) und Tristate T wählen aus den 4 Spuren und der Long
+#                     Line des Randkanals, der Eingang vom Pad (Bel-Pin O) treibt Spuren und Long Line. Direktverbindungen (Datenblatt "Direct Interconnect", iob.js): rechts nimmt
 #                     das erste Pad X und Y der CLB links; links treibt das zweite Pad B der CLB rechts;
 #                     oben treibt das erste Pad B der CLB darunter und das zweite nimmt deren X; unten
 #                     treibt das erste Pad C und D der CLB darüber und das zweite nimmt deren X.
@@ -282,7 +281,9 @@ def create_io_tiletype(ch: Chip, x: int, y: int):
         for c in tracks + longs:
             tt.create_pip(c, f"IO{z}_I", timing_class="INMUX")
             tt.create_pip(f"IO{z}_O", c, timing_class="OUTDRV")
-        for c in tracks:  # Tristate aus einer der 4 Spuren oder fest
+        # Tristate aus den Spuren und der Long Line des Randkanals oder fest. Im Original (iob.js) hat T
+        # oben 2 lokale Leitungen und 2 Long Lines, ein gemeinsames Enable (Bus) läuft über die Long Line.
+        for c in tracks + longs:
             tt.create_pip(c, f"IO{z}_T", timing_class="INMUX")
         for c in ("GND", "VCC"):
             tt.create_pip(c, f"IO{z}_I")

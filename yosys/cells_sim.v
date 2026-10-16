@@ -53,6 +53,9 @@ module XC2000_DFF #(
 	endgenerate
 endmodule
 
+// IO-Puffer: alle sitzen auf einem IOB. Zwei Konfigurationszellen schalten den Ausgangstreiber an
+// (XC2000_OUTBUF), ab (XC2000_INBUF) oder unter die Kontrolle von T (XC2000_TOBUF, XC2000_IOBUF).
+// T = 1 schaltet den Treiber ab, der Pin ist dann hochohmig (Datenblatt, Abschnitt I/O Block).
 module XC2000_INBUF (
 	input  PAD,
 	output O
@@ -65,4 +68,22 @@ module XC2000_OUTBUF (
 	output PAD
 );
 	assign PAD = I;
+endmodule
+
+module XC2000_TOBUF (
+	input  I,
+	input  T,
+	output PAD
+);
+	assign PAD = T ? 1'bz : I;
+endmodule
+
+module XC2000_IOBUF (
+	input  I,
+	input  T,
+	output O,
+	inout  PAD
+);
+	assign PAD = T ? 1'bz : I;
+	assign O = PAD;
 endmodule

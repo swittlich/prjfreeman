@@ -4,6 +4,8 @@ X(XC2000_LUT4)
 X(XC2000_DFF)
 X(XC2000_INBUF)
 X(XC2000_OUTBUF)
+X(XC2000_TOBUF)
+X(XC2000_IOBUF)
 
 // Bel-Typen (GND_DRV/VCC_DRV sind auch die Zelltypen der Konstanten aus pack())
 X(LUT3)

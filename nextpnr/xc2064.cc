@@ -118,12 +118,16 @@ struct Xc2064Impl : HimbaechelAPI
     // zuverlässiger als router1 (wie bei gatemate/xilinx). "--router router1" bleibt möglich.
     std::string getDefaultRouter() const override { return "router2"; }
 
-    // XC2000_INBUF bzw. XC2000_OUTBUF, dessen PAD am Top-Level-Port (Zelle $nextpnr_*buf) hängt
+    // IO-Puffer (alle auf einem IOB): Eingang, Ausgang, Tristate-Ausgang, bidirektional
+    static bool is_io_buffer(IdString type)
+    {
+        return type.in(id_XC2000_INBUF, id_XC2000_OUTBUF, id_XC2000_TOBUF, id_XC2000_IOBUF);
+    }
+
+    // IO-Puffer, dessen PAD am Top-Level-Port (Zelle $nextpnr_*buf) hängt
     static CellInfo *io_buffer(CellInfo *port)
     {
-        auto is_buf = [](const PortRef &r) {
-            return r.cell && r.cell->type.in(id_XC2000_INBUF, id_XC2000_OUTBUF) && r.port == id_PAD;
-        };
+        auto is_buf = [](const PortRef &r) { return r.cell && is_io_buffer(r.cell->type) && r.port == id_PAD; };
         for (auto &p : port->ports) {
             NetInfo *net = p.second.net;
             if (!net)
@@ -182,7 +186,7 @@ struct Xc2064Impl : HimbaechelAPI
             }
             CellInfo *buf = io_buffer(port);
             if (!buf)
-                log_error("%s:%d: Port '%s' hat keinen XC2000_INBUF/XC2000_OUTBUF (synth_xc2064 -noiopad?)\n",
+                log_error("%s:%d: Port '%s' hat keinen IO-Puffer XC2000_*BUF (synth_xc2064 -noiopad?)\n",
                           file.c_str(), lineno, port_name.c_str());
             auto old = buf->attrs.find(id_LOC);
             if (old != buf->attrs.end() && old->second.as_string() != pin_name)
@@ -194,7 +198,7 @@ struct Xc2064Impl : HimbaechelAPI
         }
     }
 
-    // Pins aus PCF bzw. (* LOC="P9" *) am XC2000_INBUF/XC2000_OUTBUF: das IOB schon beim Packen fest
+    // Pins aus PCF bzw. (* LOC="P9" *) am IO-Puffer (XC2000_INBUF usw.): das IOB schon beim Packen fest
     // belegen (wie GateMate), damit die GUI nach "Pack" die belegten Pads zeigt. Ein BEL-Attribut
     // bleibt dabei weg, sonst würde der Placer die Zelle ein zweites Mal binden wollen.
     void bind_constrained_pads()
@@ -203,7 +207,7 @@ struct Xc2064Impl : HimbaechelAPI
         for (auto &cell : ctx->cells) {
             CellInfo *ci = cell.second.get();
             auto loc = ci->attrs.find(id_LOC);
-            if (!ci->type.in(id_XC2000_INBUF, id_XC2000_OUTBUF) || loc == ci->attrs.end())
+            if (!is_io_buffer(ci->type) || loc == ci->attrs.end())
                 continue;
             IdString pin = ctx->id(loc->second.as_string());
             if (!pad_bels.count(pin))
@@ -236,7 +240,7 @@ struct Xc2064Impl : HimbaechelAPI
         for (auto &u : clk_users) {
             NetInfo *net = ctx->nets.at(u.first).get();
             const CellInfo *drv = net->driver.cell;
-            if (!drv || drv->type != id_XC2000_INBUF)
+            if (!is_pad_input(net))
                 continue; // abgeleiteter Takt: läuft über das allgemeine Routing
             if (drv->bel != BelId() || drv->attrs.count(id_BEL)) {
                 if (!is_global_clock(net))
@@ -277,6 +281,8 @@ struct Xc2064Impl : HimbaechelAPI
         const pool<CellTypePort> top_ports{
                 CellTypePort(id_XC2000_INBUF, id_PAD),
                 CellTypePort(id_XC2000_OUTBUF, id_PAD),
+                CellTypePort(id_XC2000_TOBUF, id_PAD),
+                CellTypePort(id_XC2000_IOBUF, id_PAD),
         };
         h.remove_nextpnr_iobs(top_ports);
         bind_constrained_pads();
@@ -313,6 +319,8 @@ struct Xc2064Impl : HimbaechelAPI
             return id_DFF;
         case id_XC2000_INBUF.index:
         case id_XC2000_OUTBUF.index:
+        case id_XC2000_TOBUF.index:
+        case id_XC2000_IOBUF.index:
             return id_IOB;
         }
         return cell_type; // GND_DRV, VCC_DRV
@@ -392,10 +400,17 @@ struct Xc2064Impl : HimbaechelAPI
         return bel == BelId() ? nullptr : ctx->getBoundBelCell(bel);
     }
 
+    // Netz kommt direkt vom Eingangstreiber eines Pads (XC2000_INBUF oder O eines XC2000_IOBUF)
+    static bool is_pad_input(const NetInfo *net)
+    {
+        const CellInfo *drv = net->driver.cell;
+        return drv && drv->type.in(id_XC2000_INBUF, id_XC2000_IOBUF) && net->driver.port == id_O;
+    }
+
     bool is_global_clock(const NetInfo *net) const
     {
         const CellInfo *drv = net->driver.cell;
-        if (!drv || drv->type != id_XC2000_INBUF)
+        if (!is_pad_input(net))
             return false;
         if (drv->bel != BelId())
             return drv->bel == clock_pads[0] || drv->bel == clock_pads[1];

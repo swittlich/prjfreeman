@@ -7,6 +7,7 @@
  *   XC2000_DFF    (CLK, D, S, R -> Q)        das Speicherelement der CLB (FF oder Latch, Parameter
  *                                            LATCH, CLKINV), Daten nur aus F/FG, asynchrones Set/Reset
  *   XC2000_INBUF  (PAD -> O), XC2000_OUTBUF (I -> PAD)
+ *   XC2000_TOBUF  (I, T -> PAD), XC2000_IOBUF (I, T -> PAD -> O)   Tristate, T = 1 schaltet ab
  * Präfix XC2000_ für die Familie (wie CC_ bei GateMate).
  *
  * Zusätzlich der Pass xc2064_ffbuf: gibt jedem FF einen eigenen treibenden LUT.
@@ -113,7 +114,7 @@ struct SynthXc2064Pass : public ScriptPass
 		log("        write the design to the specified JSON file for nextpnr-himbaechel\n");
 		log("\n");
 		log("    -noiopad\n");
-		log("        do not insert XC2000_INBUF/XC2000_OUTBUF cells for top-level ports\n");
+		log("        do not insert XC2000_INBUF/OUTBUF/TOBUF/IOBUF cells for top-level ports\n");
 		log("\n");
 		log("    -run <from_label>:<to_label>\n");
 		log("        only run the commands between the labels (see below). an empty\n");
@@ -187,7 +188,13 @@ struct SynthXc2064Pass : public ScriptPass
 		}
 
 		if (check_label("coarse")) {
-			run("synth -flatten -run coarse:fine");
+			// Tristate: interne Tristate-Netze werden Logik, die an Ports bleiben als $tribuf für
+			// iopadmap (wie bei GateMate). inout-Ports, die nur gelesen werden, werden Eingänge.
+			run("proc");
+			run("flatten");
+			run("tribuf -logic");
+			run("deminout");
+			run("synth -run coarse:fine");
 		}
 
 		if (check_label("fine")) {
@@ -203,6 +210,17 @@ struct SynthXc2064Pass : public ScriptPass
 			run("opt_clean");
 		}
 
+		if (check_label("map_io", "(unless -noiopad)")) {
+			// Vor dem LUT-Mapping, damit der Inverter für T (T = 1 schaltet ab, $_TBUF_ hat ein
+			// Enable) noch in einem LUT aufgeht
+			if (!noiopad || help_mode)
+				run("iopadmap -bits -inpad XC2000_INBUF O:PAD -outpad XC2000_OUTBUF I:PAD"
+				    " -toutpad XC2000_TOBUF ~T:I:PAD -tinoutpad XC2000_IOBUF ~T:O:I:PAD"
+				    " -ignore XC2000_INBUF PAD -ignore XC2000_OUTBUF PAD -ignore XC2000_TOBUF PAD"
+				    " -ignore XC2000_IOBUF PAD",
+				    "(unless -noiopad)");
+		}
+
 		if (check_label("map_luts")) {
 			// XC2000_LUT3 kostet 1, XC2000_LUT4 kostet 2 (belegt F und G)
 			run("abc -lut 3:4 -dress");
@@ -213,13 +231,6 @@ struct SynthXc2064Pass : public ScriptPass
 			run("techmap -map " + datdir + "/cells_map.v");
 			run("xc2064_ffbuf");
 			run("opt_clean");
-		}
-
-		if (check_label("map_io", "(unless -noiopad)")) {
-			if (!noiopad || help_mode)
-				run("iopadmap -bits -inpad XC2000_INBUF O:PAD -outpad XC2000_OUTBUF I:PAD -ignore XC2000_INBUF PAD"
-				    " -ignore XC2000_OUTBUF PAD",
-				    "(unless -noiopad)");
 		}
 
 		if (check_label("check")) {

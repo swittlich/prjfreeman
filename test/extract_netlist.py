@@ -10,6 +10,10 @@
 import os
 import re
 import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from nextpnr_api import ctx
 
 out_file = os.environ["XC2064_EXTRACT"]
 errors = []
@@ -18,6 +22,9 @@ cells = {name: c for name, c in ctx.cells}
 ports_of = {name: {k: p for k, p in c.ports} for name, c in cells.items()}
 cell_at = {c.bel: c for c in cells.values() if c.bel}
 is_out = lambda p: str(p.type).endswith("PORT_OUT")
+# IO-Puffer: Richtung des Top-Level-Ports an PAD. PAD hängt am Pin, nicht am Routing.
+IO_DIR = {"XC2000_INBUF": "input", "XC2000_OUTBUF": "output", "XC2000_TOBUF": "output", "XC2000_IOBUF": "inout"}
+is_pad = lambda c, port: port == "PAD" and c.type in IO_DIR
 
 
 def reach(wire):
@@ -41,7 +48,7 @@ driver_of = {}
 reached_pips = set()
 for c in cells.values():
     for port, pi in c.ports:
-        if not is_out(pi) or (c.type == "XC2000_OUTBUF" and port == "PAD"):
+        if not is_out(pi) or is_pad(c, port):
             continue
         wires, pips = reach(ctx.getBelPinWire(c.bel, port))
         reached_pips |= pips
@@ -61,7 +68,7 @@ for c in cells.values():
 # Vergleich mit der Netzliste
 for c in cells.values():
     for port, pi in c.ports:
-        if is_out(pi) or (c.type == "XC2000_INBUF" and port == "PAD"):
+        if is_out(pi) or is_pad(c, port):
             continue
         key = (c.name, port)
         want = (pi.net.driver.cell.name, pi.net.driver.port) if pi.net and pi.net.driver.cell else None
@@ -96,9 +103,8 @@ def param(v):
 
 top_ports = {}  # Port-Name -> Richtung, aus den PAD-Netzen der IO-Puffer
 for c in cells.values():
-    if c.type in ("XC2000_INBUF", "XC2000_OUTBUF"):
-        pad = ports_of[c.name]["PAD"].net
-        top_ports[pad.name] = "input" if c.type == "XC2000_INBUF" else "output"
+    if c.type in IO_DIR:
+        top_ports[ports_of[c.name]["PAD"].net.name] = IO_DIR[c.type]
 groups = {}
 for name, d in top_ports.items():
     m = vec.match(name)
@@ -115,7 +121,7 @@ lines, wires, undriven = [], set(), 0
 for c in sorted(cells.values(), key=lambda c: c.name):
     conns = {}
     for port, pi in c.ports:
-        if port == "PAD":
+        if is_pad(c, port):
             conns[port] = port_ref(pi.net.name)
         elif is_out(pi):
             n = net_name((c.name, port))
