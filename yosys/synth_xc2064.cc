@@ -2,11 +2,12 @@
  * synth_xc2064 – Yosys-Synthese für das XC2064-Modell (als Plugin).
  *
  * Erzeugt die Zellen, die die nextpnr-Himbächel-uarch "xc2064" erwartet:
- *   LUT3   (I[2:0] -> O, INIT[7:0])   Funktionsgenerator F oder G
- *   LUT4   (I[3:0] -> O, INIT[15:0])  F und G gemeinsam (Funktion von 4 Variablen)
- *   DFF    (CLK, D, S, R -> Q)        das Speicherelement der CLB (FF oder Latch, Parameter LATCH,
- *                                     CLKINV), Daten nur aus F/FG, asynchrones Set/Reset
- *   INBUF  (PAD -> O), OUTBUF (I -> PAD)
+ *   XC2000_LUT3   (I[2:0] -> O, INIT[7:0])   Funktionsgenerator F oder G
+ *   XC2000_LUT4   (I[3:0] -> O, INIT[15:0])  F und G gemeinsam (Funktion von 4 Variablen)
+ *   XC2000_DFF    (CLK, D, S, R -> Q)        das Speicherelement der CLB (FF oder Latch, Parameter
+ *                                            LATCH, CLKINV), Daten nur aus F/FG, asynchrones Set/Reset
+ *   XC2000_INBUF  (PAD -> O), XC2000_OUTBUF (I -> PAD)
+ * Präfix XC2000_ für die Familie (wie CC_ bei GateMate).
  *
  * Zusätzlich der Pass xc2064_ffbuf: gibt jedem FF einen eigenen treibenden LUT.
  *
@@ -25,10 +26,10 @@ PRIVATE_NAMESPACE_BEGIN
 
 // Im XC2064 kommen die FF-Daten nur aus dem Funktionsgenerator F derselben CLB. Jedes FF braucht
 // daher einen LUT, der sonst kein anderes FF speist. Fehlt der (D direkt von einem Eingang, einem
-// anderen FF oder einer Konstante) oder ist er schon vergeben, wird ein LUT3-Puffer eingesetzt.
+// anderen FF oder einer Konstante) oder ist er schon vergeben, wird ein XC2000_LUT3-Puffer eingesetzt.
 struct Xc2064FfBufPass : public Pass
 {
-	Xc2064FfBufPass() : Pass("xc2064_ffbuf", "XC2064: give every DFF its own driving LUT") {}
+	Xc2064FfBufPass() : Pass("xc2064_ffbuf", "XC2064: give every XC2000_DFF its own driving LUT") {}
 
 	void help() override
 	{
@@ -37,8 +38,9 @@ struct Xc2064FfBufPass : public Pass
 		log("    xc2064_ffbuf [selection]\n");
 		log("\n");
 		log("In the XC2064 the flip-flop data input is fed only by the F function generator of\n");
-		log("the same CLB. This pass inserts a LUT3 buffer (INIT 8'hAA, O = I[0]) in front of\n");
-		log("every DFF whose D input is not driven exclusively by a LUT3/LUT4.\n");
+		log("the same CLB. This pass inserts an XC2000_LUT3 buffer (INIT 8'hAA, O = I[0]) in\n");
+		log("front of every XC2000_DFF whose D input is not driven exclusively by an\n");
+		log("XC2000_LUT3/XC2000_LUT4.\n");
 		log("\n");
 	}
 
@@ -47,18 +49,24 @@ struct Xc2064FfBufPass : public Pass
 		log_header(design, "Executing XC2064_FFBUF pass.\n");
 		extra_args(args, 1, design);
 
+		// Eigene Zelltypen stehen nicht in yosys' kernel/constids.inc (ID(...) geht nur dafür),
+		// sondern werden im TwinePool des Designs angelegt.
+		TwinePool &tw = design->twines();
+		const IdString lut3 = tw.add("\\XC2000_LUT3"), lut4 = tw.add("\\XC2000_LUT4");
+		const IdString dff = tw.add("\\XC2000_DFF");
+
 		int inserted = 0;
 		for (auto module : design->selected_modules()) {
 			SigMap sigmap(module);
 			dict<SigBit, Cell *> lut_driver;
 			for (auto cell : module->cells())
-				if (cell->type.in(ID(LUT3), ID(LUT4)))
+				if (cell->type.in(lut3, lut4))
 					for (auto bit : sigmap(cell->getPort(ID(O))))
 						lut_driver[bit] = cell;
 
 			pool<Cell *> claimed;
 			for (auto cell : module->selected_cells()) {
-				if (cell->type != ID(DFF))
+				if (cell->type != dff)
 					continue;
 				SigBit d = sigmap(cell->getPort(ID(D))).as_bit();
 				auto it = lut_driver.find(d);
@@ -67,7 +75,7 @@ struct Xc2064FfBufPass : public Pass
 					continue;
 				}
 				Wire *w = module->addWire(NEW_ID);
-				Cell *buf = module->addCell(NEW_ID, ID(LUT3));
+				Cell *buf = module->addCell(NEW_ID, lut3);
 				buf->setParam(ID(INIT), Const(0xAA, 8));
 				SigSpec in;
 				in.append(d);
@@ -80,7 +88,7 @@ struct Xc2064FfBufPass : public Pass
 				inserted++;
 			}
 		}
-		log("Inserted %d LUT3 buffers in front of flip-flops.\n", inserted);
+		log("Inserted %d XC2000_LUT3 buffers in front of flip-flops.\n", inserted);
 	}
 } Xc2064FfBufPass;
 
@@ -105,7 +113,7 @@ struct SynthXc2064Pass : public ScriptPass
 		log("        write the design to the specified JSON file for nextpnr-himbaechel\n");
 		log("\n");
 		log("    -noiopad\n");
-		log("        do not insert INBUF/OUTBUF cells for top-level ports\n");
+		log("        do not insert XC2000_INBUF/XC2000_OUTBUF cells for top-level ports\n");
 		log("\n");
 		log("    -run <from_label>:<to_label>\n");
 		log("        only run the commands between the labels (see below). an empty\n");
@@ -196,7 +204,7 @@ struct SynthXc2064Pass : public ScriptPass
 		}
 
 		if (check_label("map_luts")) {
-			// LUT3 kostet 1, LUT4 kostet 2 (belegt F und G)
+			// XC2000_LUT3 kostet 1, XC2000_LUT4 kostet 2 (belegt F und G)
 			run("abc -lut 3:4 -dress");
 			run("opt_clean");
 		}
@@ -209,7 +217,8 @@ struct SynthXc2064Pass : public ScriptPass
 
 		if (check_label("map_io", "(unless -noiopad)")) {
 			if (!noiopad || help_mode)
-				run("iopadmap -bits -inpad INBUF O:PAD -outpad OUTBUF I:PAD -ignore INBUF PAD -ignore OUTBUF PAD",
+				run("iopadmap -bits -inpad XC2000_INBUF O:PAD -outpad XC2000_OUTBUF I:PAD -ignore XC2000_INBUF PAD"
+				    " -ignore XC2000_OUTBUF PAD",
 				    "(unless -noiopad)");
 		}
 

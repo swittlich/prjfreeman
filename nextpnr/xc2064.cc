@@ -18,7 +18,9 @@
 
 #include <algorithm>
 #include <array>
+#include <fstream>
 #include <set>
+#include <sstream>
 #include <tuple>
 
 #include "himbaechel_api.h"
@@ -82,6 +84,8 @@ struct Xc2064Impl : HimbaechelAPI
     po::options_description getUArchOptions()
     {
         po::options_description specific("XC2064 specific options");
+        specific.add_options()("pcf", po::value<std::string>(),
+                               "PCF file with pin constraints: set_io [-nowarn] <port> <pin> (PLCC68 pins P2..P68)");
         return specific;
     }
 
@@ -114,13 +118,91 @@ struct Xc2064Impl : HimbaechelAPI
     // zuverlässiger als router1 (wie bei gatemate/xilinx). "--router router1" bleibt möglich.
     std::string getDefaultRouter() const override { return "router2"; }
 
+    // XC2000_INBUF bzw. XC2000_OUTBUF, dessen PAD am Top-Level-Port (Zelle $nextpnr_*buf) hängt
+    static CellInfo *io_buffer(CellInfo *port)
+    {
+        auto is_buf = [](const PortRef &r) {
+            return r.cell && r.cell->type.in(id_XC2000_INBUF, id_XC2000_OUTBUF) && r.port == id_PAD;
+        };
+        for (auto &p : port->ports) {
+            NetInfo *net = p.second.net;
+            if (!net)
+                continue;
+            if (is_buf(net->driver))
+                return net->driver.cell;
+            for (auto &u : net->users)
+                if (is_buf(u))
+                    return u.cell;
+        }
+        return nullptr;
+    }
+
+    // Pin-Zuordnung aus einer PCF-Datei wie bei iCE40: "set_io [-nowarn] <Port> <Pin>", Busse als
+    // name[i]. Setzt LOC am IO-Puffer des Ports und überschreibt damit ein LOC aus dem Verilog.
+    void read_pcf(const std::string &file)
+    {
+        std::ifstream in(file);
+        if (!in)
+            log_error("PCF-Datei '%s' lässt sich nicht lesen\n", file.c_str());
+        log_info("Lese Pin-Zuordnung aus %s\n", file.c_str());
+        dict<IdString, std::string> used; // Pin -> Port
+        std::string line;
+        for (int lineno = 1; std::getline(in, line); lineno++) {
+            std::istringstream ss(line.substr(0, line.find('#')));
+            std::vector<std::string> w;
+            for (std::string t; ss >> t;)
+                w.push_back(t);
+            if (w.empty())
+                continue;
+            if (w[0] != "set_io")
+                log_error("%s:%d: unbekannter Befehl '%s' (nur set_io)\n", file.c_str(), lineno, w[0].c_str());
+            bool nowarn = false;
+            size_t i = 1;
+            for (; i < w.size() && w[i][0] == '-'; i++) {
+                if (w[i] == "-nowarn")
+                    nowarn = true;
+                else
+                    log_warning("%s:%d: Option '%s' wird ignoriert\n", file.c_str(), lineno, w[i].c_str());
+            }
+            if (i + 2 != w.size())
+                log_error("%s:%d: erwartet 'set_io [-nowarn] <Port> <Pin>'\n", file.c_str(), lineno);
+            const std::string &port_name = w[i], &pin_name = w[i + 1];
+            IdString pin = ctx->id(pin_name);
+            if (!pad_bels.count(pin))
+                log_error("%s:%d: '%s' ist kein XC2064-Pad (PLCC68: P2..P68)\n", file.c_str(), lineno,
+                          pin_name.c_str());
+            if (used.count(pin))
+                log_error("%s:%d: Pin %s ist schon '%s' zugeordnet\n", file.c_str(), lineno, pin_name.c_str(),
+                          used.at(pin).c_str());
+            CellInfo *port = ctx->getCellForPinConstraint(port_name);
+            if (!port) {
+                if (!nowarn)
+                    log_warning("%s:%d: kein Port '%s' im Design\n", file.c_str(), lineno, port_name.c_str());
+                continue;
+            }
+            CellInfo *buf = io_buffer(port);
+            if (!buf)
+                log_error("%s:%d: Port '%s' hat keinen XC2000_INBUF/XC2000_OUTBUF (synth_xc2064 -noiopad?)\n",
+                          file.c_str(), lineno, port_name.c_str());
+            auto old = buf->attrs.find(id_LOC);
+            if (old != buf->attrs.end() && old->second.as_string() != pin_name)
+                log_warning("%s:%d: '%s' war per LOC an %s, jetzt an %s\n", file.c_str(), lineno,
+                            port_name.c_str(), old->second.as_string().c_str(), pin_name.c_str());
+            buf->attrs[id_LOC] = pin_name;
+            used[pin] = port_name;
+            log_info("    %s -> %s\n", port_name.c_str(), pin_name.c_str());
+        }
+    }
+
     void pack() override
     {
-        // (* LOC="P9" *) an INBUF/OUTBUF: Pad nach PLCC68-Pin wählen
+        if (ctx->args.options.count("pcf"))
+            read_pcf(ctx->args.options.at("pcf").as<std::string>());
+        // (* LOC="P9" *) an XC2000_INBUF/XC2000_OUTBUF: Pad nach PLCC68-Pin wählen
         for (auto &cell : ctx->cells) {
             CellInfo *ci = cell.second.get();
             auto loc = ci->attrs.find(id_LOC);
-            if (!ci->type.in(id_INBUF, id_OUTBUF) || loc == ci->attrs.end())
+            if (!ci->type.in(id_XC2000_INBUF, id_XC2000_OUTBUF) || loc == ci->attrs.end())
                 continue;
             IdString pin = ctx->id(loc->second.as_string());
             if (!pad_bels.count(pin))
@@ -130,8 +212,8 @@ struct Xc2064Impl : HimbaechelAPI
         }
         // IO-Puffer setzt die Synthese (synth_xc2064) ein
         const pool<CellTypePort> top_ports{
-                CellTypePort(id_INBUF, id_PAD),
-                CellTypePort(id_OUTBUF, id_PAD),
+                CellTypePort(id_XC2000_INBUF, id_PAD),
+                CellTypePort(id_XC2000_OUTBUF, id_PAD),
         };
         h.remove_nextpnr_iobs(top_ports);
         h.replace_constants(CellTypePort(id_VCC_DRV, id_VCC), CellTypePort(id_GND_DRV, id_GND), {}, {}, id_VCC,
@@ -139,9 +221,9 @@ struct Xc2064Impl : HimbaechelAPI
         int moved = route_q_feedback_to_i2();
         // Das FF bekommt seine Daten nur aus F bzw. FG derselben CLB. synth_xc2064 sorgt dafür, dass
         // jedes FF einen eigenen LUT hat; LUT und FF werden hier als Cluster gemeinsam platziert.
-        int n3 = h.constrain_cell_pairs(pool<CellTypePort>{{id_LUT3, id_O}}, pool<CellTypePort>{{id_DFF, id_D}},
+        int n3 = h.constrain_cell_pairs(pool<CellTypePort>{{id_XC2000_LUT3, id_O}}, pool<CellTypePort>{{id_XC2000_DFF, id_D}},
                                         Z_FF - Z_F);
-        int n4 = h.constrain_cell_pairs(pool<CellTypePort>{{id_LUT4, id_O}}, pool<CellTypePort>{{id_DFF, id_D}},
+        int n4 = h.constrain_cell_pairs(pool<CellTypePort>{{id_XC2000_LUT4, id_O}}, pool<CellTypePort>{{id_XC2000_DFF, id_D}},
                                         Z_FF - Z_FG);
         log_info("Constrained %d LUT3/FF and %d LUT4/FF pairs, %d Q feedback inputs moved to I[2].\n", n3, n4,
                  moved);
@@ -155,19 +237,28 @@ struct Xc2064Impl : HimbaechelAPI
         return clb_valid(l.x, l.y, explain_invalid);
     }
 
-    IdString getBelBucketForCellType(IdString cell_type) const override
+    // Primitive (Zelltypen mit Präfix XC2000_) -> Bel-Typ, auf dem sie sitzen
+    static IdString bel_type_for(IdString cell_type)
     {
-        if (cell_type.in(id_INBUF, id_OUTBUF))
+        switch (cell_type.index) {
+        case id_XC2000_LUT3.index:
+            return id_LUT3;
+        case id_XC2000_LUT4.index:
+            return id_LUT4;
+        case id_XC2000_DFF.index:
+            return id_DFF;
+        case id_XC2000_INBUF.index:
+        case id_XC2000_OUTBUF.index:
             return id_IOB;
-        return cell_type;
+        }
+        return cell_type; // GND_DRV, VCC_DRV
     }
+
+    IdString getBelBucketForCellType(IdString cell_type) const override { return bel_type_for(cell_type); }
 
     bool isValidBelForCellType(IdString cell_type, BelId bel) const override
     {
-        IdString bel_type = ctx->getBelType(bel);
-        if (bel_type == id_IOB)
-            return cell_type.in(id_INBUF, id_OUTBUF);
-        return bel_type == cell_type;
+        return ctx->getBelType(bel) == bel_type_for(cell_type);
     }
 
   private:
@@ -186,15 +277,15 @@ struct Xc2064Impl : HimbaechelAPI
         int moved = 0;
         for (auto &cell : ctx->cells) {
             CellInfo *ff = cell.second.get();
-            if (ff->type != id_DFF)
+            if (ff->type != id_XC2000_DFF)
                 continue;
             NetInfo *d = ff->getPort(id_D), *q = ff->getPort(id_Q);
-            if (!d || !q || !d->driver.cell || !d->driver.cell->type.in(id_LUT3, id_LUT4))
+            if (!d || !q || !d->driver.cell || !d->driver.cell->type.in(id_XC2000_LUT3, id_XC2000_LUT4))
                 continue;
             CellInfo *lut = d->driver.cell;
             if (lut->getPort(lut_in(2)) == q)
                 continue;
-            int width = lut->type == id_LUT4 ? 4 : 3;
+            int width = lut->type == id_XC2000_LUT4 ? 4 : 3;
             for (int i = 0; i < width; i++) {
                 if (i == 2 || lut->getPort(lut_in(i)) != q)
                     continue;
@@ -240,7 +331,7 @@ struct Xc2064Impl : HimbaechelAPI
     bool is_global_clock(const NetInfo *net) const
     {
         const CellInfo *drv = net->driver.cell;
-        if (!drv || drv->type != id_INBUF)
+        if (!drv || drv->type != id_XC2000_INBUF)
             return false;
         if (drv->bel != BelId())
             return drv->bel == clock_pads[0] || drv->bel == clock_pads[1];

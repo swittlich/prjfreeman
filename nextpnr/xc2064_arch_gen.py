@@ -345,13 +345,13 @@ def set_timings(ch: Chip):
                         ("LONGDRV", 4000), ("GCLK", 3000)):
         tmg.set_pip_class(grade=speed, name=name, delay=TimingValue(delay),
                           in_cap=TimingValue(5000), out_res=TimingValue(1000))
-    lut3 = ch.timing.add_cell_variant(speed, "LUT3")
+    lut3 = ch.timing.add_cell_variant(speed, "XC2000_LUT3")
     for i in range(3):
         lut3.add_comb_arc(f"I[{i}]", "O", TimingValue(15000))
-    lut4 = ch.timing.add_cell_variant(speed, "LUT4")
+    lut4 = ch.timing.add_cell_variant(speed, "XC2000_LUT4")
     for i in range(4):
         lut4.add_comb_arc(f"I[{i}]", "O", TimingValue(18000))
-    dff = ch.timing.add_cell_variant(speed, "DFF")
+    dff = ch.timing.add_cell_variant(speed, "XC2000_DFF")
     dff.add_setup_hold("CLK", "D", ClockEdge.RISING, TimingValue(8000), TimingValue(2000))
     dff.add_clock_out("CLK", "Q", ClockEdge.RISING, TimingValue(10000))
 

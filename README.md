@@ -18,9 +18,9 @@ Grundlagen:
 | Raster | 8×8 CLBs (X1Y1…X8Y8) plus IO-Ring. Shirriffs 9×9 Kacheln AA…II entsprechen X1Y1…X9Y9. Jede Kachel enthält die Kanäle oberhalb und links ihrer CLB, die 9. Spalte/Zeile nur Routing und Pads | Shirriff |
 | Kanäle, Switch-Matrizen | 9 horizontale und 9 vertikale Kanäle, an ihren 9×9 Kreuzungen je 2 Switch-Matrizen mit 8 Pins (2 je Seite), jeder Pin mit 5 der 7 anderen verbindbar (20 Verbindungen) | Anzahl und Verbindungszahl wie bei Shirriff, das genaue Muster ist angenommen |
 | Einzelsegmente | 4 Spuren je Kanal zwischen benachbarten Switch-Matrizen | Original ähnlich |
-| Funktionsgeneratoren | `F`, `G` (`LUT3`): Eingang 1 aus {A, B}, Eingang 2 aus {B, C}, Eingang 3 aus {C, D, **Q**} | `clb.js` |
-| 4-Variablen-Modus | `FG` (`LUT4`): Eingänge wie F/G, **B** wählt zwischen F und G (I[3]), belegt beide | `clb.js` |
-| Speicherelement | `DFF`: Flipflop oder **Latch** (`LATCH`), Takt aus **K, C oder G**, **invertierbar** (`CLKINV`), asynchrones **Set aus A oder F**, **Reset aus D oder G**, Daten aus F bzw. FG | `clb.js`; Vorrang Reset vor Set angenommen |
+| Funktionsgeneratoren | `F`, `G` (Primitiv `XC2000_LUT3`): Eingang 1 aus {A, B}, Eingang 2 aus {B, C}, Eingang 3 aus {C, D, **Q**} | `clb.js` |
+| 4-Variablen-Modus | `FG` (`XC2000_LUT4`): Eingänge wie F/G, **B** wählt zwischen F und G (I[3]), belegt beide | `clb.js` |
+| Speicherelement | `XC2000_DFF`: Flipflop oder **Latch** (`LATCH`), Takt aus **K, C oder G**, **invertierbar** (`CLKINV`), asynchrones **Set aus A oder F**, **Reset aus D oder G**, Daten aus F bzw. FG | `clb.js`; Vorrang Reset vor Set angenommen |
 | Ausgänge | X, Y je aus Q, F oder G, beide in den vertikalen Kanal **rechts** der CLB: X an V2, V4 und die 1. vertikale Long Line, Y an V1, V3 und die 2. | `clb.js`; Shirriffs Bitmap (`XC2064-def.txt`, `draw.js`). V5 hat das Modell nicht (4 Spuren je Kanal) |
 | CLB-Eingänge A–D | A aus dem Kanal oberhalb und der Long Line der eigenen Zeile, B/C aus dem Kanal links und je einer vertikalen Long Line, D aus dem Kanal unterhalb und der Long Line der Zeile darunter, dazu die Direktverbindungen (je 6–7 Quellen) | `clb.js`; Original: 6–10 Quellen je Eingang |
 | Direktverbindungen | X → C/D der CLB darüber und A/B der CLB darunter, Y → B der CLB rechts | Datenblatt, Abschnitt *Direct Interconnect* |
@@ -44,12 +44,24 @@ gelatchte IOBs.
 
 `pack()` hält LUT und FF als Cluster zusammen. Liegt der eigene FF-Ausgang Q nicht an Eingang 3 des
 LUTs, tauscht `pack()` die Eingänge und permutiert INIT, damit die Q-Rückführung genutzt wird.
-Pins wählt man mit `(* LOC="P9" *)` an INBUF/OUTBUF, `pack()` setzt daraus das BEL-Attribut.
+
+Die Primitive heißen mit dem Familienpräfix `XC2000_` (wie `CC_` bei GateMate), damit sie sich nicht
+mit Zellen anderer Bibliotheken verwechseln lassen: `XC2000_LUT3`, `XC2000_LUT4`, `XC2000_DFF`,
+`XC2000_INBUF`, `XC2000_OUTBUF`. Die Bel-Typen in der Chip-Datenbank bleiben kurz (`LUT3`, `LUT4`,
+`DFF`, `IOB`), `getBelBucketForCellType()` ordnet sie zu. Zum Gegenstück in yosys siehe unten.
+
+Pins stehen in einer **PCF-Datei** wie bei iCE40 (`set_io [-nowarn] <Port> <Pin>`, Busse als
+`leds[0]`, Pins als PLCC68-Namen P2…P68), die nextpnr mit `--vopt pcf=<Datei>` liest. `flow.sh` nimmt
+`design.pcf` neben `design.v` automatisch, `PCF=…` wählt eine andere. Ohne Eintrag entscheidet der
+Placer. Alternativ geht weiterhin `(* LOC="P9" *)` an einem `XC2000_INBUF`/`XC2000_OUTBUF` im
+Verilog, die PCF-Datei hat Vorrang. `pack()` setzt daraus das BEL-Attribut.
 
 yosys (`yosys/synth_xc2064.cc`):
 - `abc -lut 3:4` bewertet einen LUT4 mit den Kosten zweier LUT3.
 - `dfflegalize` erlaubt FF und Latch mit beiden Taktpolaritäten und asynchronem Set/Reset.
 - Der Pass `xc2064_ffbuf` gibt jedem FF einen eigenen treibenden LUT.
+- Die eigenen Zelltypen stehen nicht in yosys' `kernel/constids.inc`. `ID(...)` geht dafür bei
+  aktuellem yosys (Twine-IdStrings) nicht, der Pass legt sie mit `design->twines().add(...)` an.
 
 Standard-Router ist `router2`, weil das Routing knapp ist. Mit `router1` scheitern manche Seeds an
 Überlastung, `--router router1` bleibt möglich.
@@ -58,7 +70,7 @@ Standard-Router ist `router2`, weil das Routing knapp ist. Mit `router1` scheite
 
 ```bash
 scripts/build-nextpnr.sh debug              # nach Änderungen an nextpnr/* (inkl. Generator)
-arch/xc2064/flow.sh                         # Synthese + Place & Route (Timing-Ziel 5 MHz, FREQ=… ändert es)
+arch/xc2064/flow.sh                         # Synthese + Place & Route mit examples/blinky.pcf (5 MHz, FREQ=… ändert es)
 arch/xc2064/flow.sh arch/xc2064/examples/latch_sr.v   # anderes Design
 arch/xc2064/flow.sh --gui                   # mit nextpnr-GUI: Pack, Place, Route über die Werkzeugleiste
 nextpnr-himbaechel --device XC2064 --json build/flows/xc2064/blinky.pnr.json --gui   # geroutetes Ergebnis ansehen
@@ -69,8 +81,8 @@ Ein schon geroutetes `*.pnr.json` lädt nextpnr in der GUI direkt. Auf der Komma
 
 | Beispiel | Inhalt | Ergebnis |
 |---|---|---|
-| `examples/blinky.v` | 16-Bit-Zähler, Takt an P9 | 20 LUT3, 7 LUT4, 16 FF, etwa 5,3–6 MHz je nach Seed. Der kritische Pfad sind die LUT-Ebenen der Zähler-Logik, eine Carry-Kette hatte erst der XC4000 |
-| `examples/latch_sr.v` | FF mit fallender Flanke, FF mit asynchronem Set/Reset, Latch | 3 Speicherelemente mit `CLKINV`, `S`/`R` bzw. `LATCH` |
+| `examples/blinky.v` | 16-Bit-Zähler, Pins in `blinky.pcf` (Takt an P9, alles am oberen Rand) | 20 LUT3, 7 LUT4, 16 FF, etwa 5,4 MHz (ohne PCF frei platziert 5,3–6 MHz je nach Seed). Der kritische Pfad sind die LUT-Ebenen der Zähler-Logik, eine Carry-Kette hatte erst der XC4000 |
+| `examples/latch_sr.v` | FF mit fallender Flanke, FF mit asynchronem Set/Reset, Latch, Pins in `latch_sr.pcf` | 3 Speicherelemente mit `CLKINV`, `S`/`R` bzw. `LATCH` |
 
 In VS Code laufen die allgemeinen Tasks *Arch: Flow ausführen* und *Arch: Flow mit nextpnr-GUI* sowie
 die Debug-Konfigurationen für Architekturen (Run and Debug). Als Namen jeweils `xc2064` eingeben.
