@@ -73,7 +73,9 @@ Box plus einem Rand von normalerweise 3 Kacheln. Mit 4 Spuren je Kanal reicht da
 wechseln sich zwei Netze an einem Draht ab, und router2 kommt nicht mehr zum Ende (er hat kein
 Abbruchlimit). `preRoute()` setzt den Rand deshalb auf die Chipgröße, wenn die Einstellungen
 `router2/bbMargin/x` und `/y` nicht schon gesetzt sind. Mit `--router router1` scheitern manche Seeds an
-Überlastung, die Option bleibt aber möglich.
+Überlastung, die Option bleibt aber möglich. Auch mit dem großen Rand pendelt router2 bei manchen
+Platzierungen lange: Blinky mit PCF und Standard-Seed braucht rund 5300 Iterationen (eine Minute), die
+übrigen Läufe des Regressionstests unter 110. Die Spalte *Routing* des Tests zeigt das.
 
 ## Ablauf
 
@@ -83,6 +85,7 @@ arch/xc2064/flow.sh                         # Synthese + Place & Route mit examp
 SEED=1 arch/xc2064/flow.sh                  # mit festem nextpnr-Seed (ohne SEED: nextpnr-Standard)
 arch/xc2064/flow.sh arch/xc2064/examples/latch_sr.v   # anderes Design
 arch/xc2064/flow.sh --gui                   # mit nextpnr-GUI: Pack, Place, Route über die Werkzeugleiste
+arch/xc2064/test/run.sh                     # Regressionstest (siehe unten)
 nextpnr-himbaechel --device XC2064 --json build/flows/xc2064/blinky.pnr.json --gui   # geroutetes Ergebnis ansehen
 ```
 
@@ -96,6 +99,33 @@ Ein schon geroutetes `*.pnr.json` lädt nextpnr in der GUI direkt. Auf der Komma
 
 In VS Code laufen die allgemeinen Tasks *Arch: Flow ausführen* und *Arch: Flow mit nextpnr-GUI* sowie
 die Debug-Konfigurationen für Architekturen (Run and Debug). Als Namen jeweils `xc2064` eingeben.
+
+### Regressionstest
+
+`test/run.sh [design.v …]` synthetisiert jedes Beispiel (ohne Argument alle `examples/*.v`), routet es
+mit dem nextpnr-Standard-Seed und den Seeds 1–6, mit und ohne PCF, und prüft jeden Lauf:
+
+| Spalte | Prüfung |
+|---|---|
+| PnR | nextpnr endet ohne Fehler innerhalb von `TIMEOUT` Sekunden (Standard 300, router2 hat kein Abbruchlimit). Verfehltes Timing allein ist kein Fehler (`--timing-allow-fail`) |
+| Netz | Die Netzliste nach dem Routing (`*.pnr.json`, also nach `pack()` mit Eingangstausch, INIT-Permutation und Konstanten) ist formal äquivalent zum RTL |
+| Pips | `test/extract_netlist.py` gewinnt die Netzliste allein aus den belegten Bels und den benutzten Pips zurück, also aus dem, was ein Bitstream festhält. Jeder Eingang muss am Treiber hängen, den die Netzliste von nextpnr vorsieht, keiner darf zwei haben, und kein benutzter Pip darf verwaist sein. Die so gewonnene Netzliste muss ebenfalls äquivalent zum RTL sein. Das deckt Platzierung und Routing mit ab |
+| Fmax | Kleinste Frequenz aller Takte. Mit `FMIN=…` (MHz) ist ein Wert darunter ein Fehler |
+| Routing | Iterationen und Laufzeit von router2, nur zur Information |
+
+Der Vergleich läuft in yosys: `equiv_make` paart die gleichnamigen Signale (Ports und Register),
+`clk2fflogic` bildet die Takte mit ihrer Flanke nach (`CLKINV` zählt also mit), und `equiv_induct`
+beweist die Gleichheit für alle Eingangsfolgen. Als Modelle dienen `yosys/cells_sim.v` und für die
+Konstanten-Zellen, die erst nextpnr anlegt, `test/pnr_cells.v`. Ein verändertes INIT-Bit, vertauschte
+LUT-Eingänge, ein umgedrehtes `CLKINV`, ein FF statt Latch, ein gelöster Pip oder ein LUT-Eingang an
+der falschen Quelle fallen jeweils auf.
+
+Für den Bitstream ist die Spalte *Pips* die spätere Gegenprobe: Ein Leser, der Bels und Pips aus der
+RBT-Datei zurückgewinnt, kann dieselbe Netzliste schreiben und denselben Vergleich durchlaufen.
+
+Umgebungsvariablen: `SEEDS="1 2 3"` (zusätzlich zum Standard-Seed, leer nur dieser), `FREQ`, `FMIN`,
+`TIMEOUT`, `YOSYS`, `NEXTPNR`. Logs, Netzlisten und die Äquivalenz-Logs je Lauf liegen unter
+`build/flows/xc2064/test/<design>/`. Das Skript endet mit Fehler, wenn ein Lauf fehlschlägt.
 
 ### GUI
 
