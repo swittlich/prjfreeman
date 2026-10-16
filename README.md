@@ -26,7 +26,7 @@ Grundlagen:
 | Direktverbindungen | X → C/D der CLB darüber und A/B der CLB darunter, Y → B der CLB rechts | Datenblatt, Abschnitt *Direct Interconnect* |
 | Long Lines | 1 horizontale je Zeile, 2 vertikale je Spalte (auch Zeile/Spalte I am Rand), bis zu den Pads | Datenblatt, Abschnitt *Longlines* |
 | Taktnetze | K aus **GCLK** (Pin P9, oben links) oder **ACLK** (Pin P43, unten rechts) | Lage der Puffer laut Datenblatt, Zuordnung zu P9/P43 angenommen |
-| IOBs | **58 Pads mit PLCC68-Namen** (Bel `P9` usw.) am Kanalstück **parallel zum Rand** neben einer Rand-CLB: das erste Pad einer Kachel am eigenen Stück, das zweite am vorherigen, je bis zu zwei IOBs pro Stück. Ausgang zum Pad (Bel-Pin I, im Datenblatt „O“) aus den 4 Spuren und der Long Line des Randkanals, Tristate T aus den 4 Spuren oder fest, Eingang vom Pad (Bel-Pin O) auf Spuren und Long Line. Am rechten Rand nimmt das erste Pad X und Y der CLB links direkt | `iob.js`; Datenblatt, Abschnitt *Direct Interconnect*. Gelatchte Ein-/Ausgänge und die übrigen Direktverbindungen (links, oben, unten) nicht modelliert |
+| IOBs | **58 Pads mit PLCC68-Namen** (Bel `P9` usw.) am Kanalstück **parallel zum Rand** neben einer Rand-CLB: das erste Pad einer Kachel am eigenen Stück, das zweite am vorherigen, je bis zu zwei IOBs pro Stück. Ausgang zum Pad (Bel-Pin I, im Datenblatt „O“) aus den 4 Spuren und der Long Line des Randkanals, Tristate T aus den 4 Spuren oder fest, Eingang vom Pad (Bel-Pin O) auf Spuren und Long Line. Direktverbindungen mit der Rand-CLB: rechts nimmt das erste Pad X und Y; links treibt das zweite Pad B; oben treibt das erste Pad B und das zweite nimmt X; unten treibt das erste Pad C und D und das zweite nimmt X. Das IOB oben verhält sich damit wie eine CLB darüber, das unten wie eine darunter | `iob.js`; Datenblatt, Abschnitt *Direct Interconnect*. Gelatchte Ein-/Ausgänge nicht modelliert, am rechten Rand nimmt nur das erste Pad X/Y (laut `iob.js` auch das zweite) |
 | Timing | LUT3 15 ns, LUT4 18 ns, FF 10 ns Clock-to-Q / 8 ns Setup, Pass-Transistor 2,5 ns | Größenordnung XC2064-70 |
 
 Nicht modelliert: der Mux-Modus „FGM“ (zwei unabhängige 3-Variablen-Funktionen, B wählt) und
@@ -65,14 +65,19 @@ yosys (`yosys/synth_xc2064.cc`):
 - Die eigenen Zelltypen stehen nicht in yosys' `kernel/constids.inc`. `ID(...)` geht dafür bei
   aktuellem yosys (Twine-IdStrings) nicht, der Pass legt sie mit `design->twines().add(...)` an.
 
-Standard-Router ist `router2`, weil das Routing knapp ist. Mit `router1` scheitern manche Seeds an
-Überlastung, `--router router1` bleibt möglich.
+Standard-Router ist `router2`, weil das Routing knapp ist. Er sucht jedes Netz nur in dessen Bounding
+Box plus einem Rand von normalerweise 3 Kacheln. Mit 4 Spuren je Kanal reicht das nicht immer: dann
+wechseln sich zwei Netze an einem Draht ab, und router2 kommt nicht mehr zum Ende (er hat kein
+Abbruchlimit). `preRoute()` setzt den Rand deshalb auf die Chipgröße, wenn die Einstellungen
+`router2/bbMargin/x` und `/y` nicht schon gesetzt sind. Mit `--router router1` scheitern manche Seeds an
+Überlastung, die Option bleibt aber möglich.
 
 ## Ablauf
 
 ```bash
 scripts/build-nextpnr.sh debug              # nach Änderungen an nextpnr/* (inkl. Generator)
 arch/xc2064/flow.sh                         # Synthese + Place & Route mit examples/blinky.pcf (5 MHz, FREQ=… ändert es)
+SEED=1 arch/xc2064/flow.sh                  # mit festem nextpnr-Seed (ohne SEED: nextpnr-Standard)
 arch/xc2064/flow.sh arch/xc2064/examples/latch_sr.v   # anderes Design
 arch/xc2064/flow.sh --gui                   # mit nextpnr-GUI: Pack, Place, Route über die Werkzeugleiste
 nextpnr-himbaechel --device XC2064 --json build/flows/xc2064/blinky.pnr.json --gui   # geroutetes Ergebnis ansehen
@@ -83,7 +88,7 @@ Ein schon geroutetes `*.pnr.json` lädt nextpnr in der GUI direkt. Auf der Komma
 
 | Beispiel | Inhalt | Ergebnis |
 |---|---|---|
-| `examples/blinky.v` | 16-Bit-Zähler, Pins in `blinky.pcf` (Takt an P9, alles am oberen Rand) | 20 LUT3, 7 LUT4, 16 FF, etwa 5,4 MHz (ohne PCF frei platziert 5,3–6 MHz je nach Seed). Der kritische Pfad sind die LUT-Ebenen der Zähler-Logik, eine Carry-Kette hatte erst der XC4000 |
+| `examples/blinky.v` | 16-Bit-Zähler, Pins in `blinky.pcf` (Takt an P9, alles am oberen Rand) | 20 LUT3, 7 LUT4, 16 FF, je nach Seed 4,9–6,2 MHz. Der nextpnr-Standard-Seed verfehlt das Ziel 5 MHz knapp (4,9 MHz), `flow.sh --seed 1` oder `SEED=1 arch/xc2064/flow.sh` schafft 6,0 MHz. Ohne PCF liegt der Takt nicht am Taktpin P9, belegt dann in jeder CLB den Eingang C, und das Platzieren scheitert. Der kritische Pfad sind die LUT-Ebenen der Zähler-Logik, eine Carry-Kette hatte erst der XC4000 |
 | `examples/latch_sr.v` | FF mit fallender Flanke, FF mit asynchronem Set/Reset, Latch, Pins in `latch_sr.pcf` | 3 Speicherelemente mit `CLKINV`, `S`/`R` bzw. `LATCH` |
 
 In VS Code laufen die allgemeinen Tasks *Arch: Flow ausführen* und *Arch: Flow mit nextpnr-GUI* sowie
@@ -104,9 +109,12 @@ enden die Switch-Matrizen, die Kanäle laufen dort nur parallel zum Rand weiter.
 Die IOBs sind wie im Datenblatt gezeichnet: außen das Pad, im Rahmen der Ausgangstreiber (Dreieck zum
 Pad) mit seinem Multiplexer und dem kleineren Multiplexer für das Tristate, daneben der Eingangstreiber
 (Dreieck nach innen). Ausgang, Tristate und Eingang laufen als drei Leitungen quer über das
-Randkanalstück, PIP-Kästchen zeigen, an welchen Spuren und Long Lines sie geschaltet werden können. Am
-rechten Rand laufen X und Y der CLB links durch den Kanal in den Ausgangsmultiplexer des IOB. P9 und
-P43 führen ihren Eingang außerdem zum Taktpuffer von GCLK bzw. ACLK.
+Randkanalstück, PIP-Kästchen zeigen, an welchen Spuren und Long Lines sie geschaltet werden können.
+Direktverbindungen: Am rechten Rand laufen X und Y der CLB links durch den Kanal in den
+Ausgangsmultiplexer des IOB, oben und unten läuft X senkrecht in den Ausgangsmultiplexer des zweiten IOB
+(dafür ist es gespiegelt gezeichnet). Der Eingang vom Pad läuft oben zu B, unten zu C und D, links zu B
+der Rand-CLB, auf den Wegen, die dort sonst die Direktleitungen der fehlenden Nachbar-CLB nehmen. P9
+und P43 führen ihren Eingang außerdem zum Taktpuffer von GCLK bzw. ACLK.
 
 Eine CLB (grauer Rahmen) folgt dem Blockschaltbild im Datenblatt, von links nach rechts:
 
@@ -143,8 +151,7 @@ Benutztes immer obenauf.
 - **Mux-Modus FGM** (B wählt zwischen zwei unabhängigen 3-Variablen-Funktionen) als eigener Bel-Modus.
 - **CLB-Eingänge A–D** mit allen Quellen des Originals (laut `clb.js` 6–10 je Eingang).
 - **Gelatchte IOB-Eingänge** mit den vier IOB-Taktmultiplexern (`iob.js`).
-- **Übrige Direktverbindungen der IOBs**: Eingang vom Pad zu B der CLB am linken Rand, oben und unten
-  in beide Richtungen (Datenblatt, `iob.js`).
+- **Zweites IOB am rechten Rand** mit X und Y der CLB links (`iob.js`, `rightlower`).
 - **Echter Bitstream**: [`XC2064-def.txt`](https://github.com/shirriff/xc2064) beschreibt alle 11.360
   Konfigurationsbits (LUT-Inhalte, IOB-Optionen, PIPs). Für ladbare Bitstreams müssten die PIPs des
   Modells genau den PIPs des Originals entsprechen. Dafür muss man den Routing-Graphen aus diesen Daten

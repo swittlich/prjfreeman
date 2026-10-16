@@ -23,7 +23,10 @@
 #                     Rand-CLB: das erste Pad einer Kachel am eigenen Stück, das zweite am vorherigen.
 #                     Ausgang zum Pad (Bel-Pin I) und Tristate T wählen aus den 4 Spuren (I auch aus der
 #                     Long Line des Randkanals), der Eingang vom Pad (Bel-Pin O) treibt Spuren und Long
-#                     Line. Am rechten Rand nimmt das erste Pad X und Y der CLB links direkt.
+#                     Line. Direktverbindungen (Datenblatt "Direct Interconnect", iob.js): rechts nimmt
+#                     das erste Pad X und Y der CLB links; links treibt das zweite Pad B der CLB rechts;
+#                     oben treibt das erste Pad B der CLB darunter und das zweite nimmt deren X; unten
+#                     treibt das erste Pad C und D der CLB darüber und das zweite nimmt deren X.
 #     Ausgänge:       X und Y in den Kanal rechts der CLB, X an V2/V4 und die 1. vertikale Long Line,
 #                     Y an V1/V3 und die 2. (Shirriffs Bitmap; V5 fehlt im Modell, siehe Einzelsegmente)
 #     Eingänge:       A aus dem Kanal oberhalb und der Long Line der eigenen Zeile, D aus dem Kanal
@@ -120,9 +123,27 @@ def pad_access(side, seg, m, k):
             if side and p["side"] == side and p["seg"] == seg]
 
 
-def right_pad(seg):
-    """Erstes Pad am rechten Randkanalstück neben der CLB-Zeile seg (nimmt X und Y direkt)."""
-    return next((p for p in PAD_INFO if p["side"] == "R" and p["z"] == 0 and p["seg"] == seg), None)
+def edge_pad(side, z, seg):
+    """Pad z am Randkanalstück (side, seg), falls es das Pad gibt."""
+    return next((p for p in PAD_INFO if p["side"] == side and p["z"] == z and p["seg"] == seg), None)
+
+
+# Direktverbindungen zwischen Rand-CLB und IOB: (Seite, z, Richtung, CLB-Draht bzw. IOB-Draht).
+# "in": Eingang vom Pad -> CLB-Pins (Draht in der CLB-Kachel), "out": X der CLB -> Ausgang zum Pad.
+# Das IOB oben verhält sich wie eine CLB darüber, das unten wie eine darunter (Datenblatt).
+PAD_DIRECT = [
+    ("L", 1, "in", "PL"),     # leftlower -> B
+    ("T", 0, "in", "PT"),     # topleft -> B
+    ("B", 0, "in", "PB"),     # bottomleft -> C, D
+    ("T", 1, "out", "IO1_X"), # X -> topright
+    ("B", 1, "out", "IO1_X"), # X -> bottomright
+    ("R", 0, "out", "IO0_X"), # X (und Y) -> rightupper
+]
+
+
+def edge_clb(side, seg):
+    """Rand-CLB neben dem Randkanalstück (side, seg)."""
+    return {"L": (1, seg), "R": (N_CLB, seg), "T": (seg, 1), "B": (seg, N_CLB)}[side]
 
 
 def create_switch_matrices(tt: TileType):
@@ -171,6 +192,9 @@ def create_clb_tiletype(ch: Chip):
     tt.create_wire("XT", "DIRECT")  # X der CLB darüber
     tt.create_wire("XB", "DIRECT")  # X der CLB darunter
     tt.create_wire("YL", "DIRECT")  # Y der CLB links
+    tt.create_wire("PL", "DIRECT")  # Eingang vom Pad links (Rand-CLB, Spalte 1)
+    tt.create_wire("PT", "DIRECT")  # ... vom Pad oben (Zeile 1)
+    tt.create_wire("PB", "DIRECT")  # ... vom Pad unten (Zeile 8)
     # Long Lines der Nachbarn: horizontale der Zeile darunter (für D), vertikale der Spalte rechts (X, Y)
     tt.create_wire("LHB", "LONG_ACCESS")
     tt.create_wire("RLV0", "LONG_ACCESS")
@@ -183,9 +207,9 @@ def create_clb_tiletype(ch: Chip):
     bot = [f"BOT{m}{k}" for (m, k) in TRACKS]
     sources = {
         "A": top + ["XT", "LH"],
-        "B": left + ["XT", "YL", "LV0"],
-        "C": left + ["XB", "LV1"],
-        "D": bot + ["XB", "LHB"],
+        "B": left + ["XT", "YL", "LV0", "PL", "PT"],
+        "C": left + ["XB", "LV1", "PB"],
+        "D": bot + ["XB", "LHB", "PB"],
     }
     for pin, srcs in sources.items():
         for s in srcs:
@@ -263,10 +287,12 @@ def create_io_tiletype(ch: Chip, x: int, y: int):
         for c in ("GND", "VCC"):
             tt.create_pip(c, f"IO{z}_I")
             tt.create_pip(c, f"IO{z}_T")
-        if p["side"] == "R" and z == 0:  # Direktverbindung von X und Y der CLB links
-            for o in ("X", "Y"):
-                tt.create_wire(f"IO0_{o}", "DIRECT")
-                tt.create_pip(f"IO0_{o}", "IO0_I", timing_class="INMUX")
+        # Direktverbindung von X (rechts auch Y) der Rand-CLB in den Ausgangsmultiplexer
+        outs = ["X", "Y"] if p["side"] == "R" else ["X"]
+        if any(d[:3] == (p["side"], z, "out") for d in PAD_DIRECT):
+            for o in outs:
+                tt.create_wire(f"IO{z}_{o}", "DIRECT")
+                tt.create_pip(f"IO{z}_{o}", f"IO{z}_I", timing_class="INMUX")
         # Taktpuffer an den Pads P9 (GCLK) und P43 (ACLK)
         if p["pin"] in (GCLK_PIN, ACLK_PIN):
             src = "GCLK_SRC" if p["pin"] == GCLK_PIN else "ACLK_SRC"
@@ -309,15 +335,25 @@ def create_nodes(ch: Chip):
                     node.append(NodeWire(x, y + 1, "XT"))
                 if is_clb(x, y - 1):
                     node.append(NodeWire(x, y - 1, "XB"))
-                rp = right_pad(y) if x == N_CLB else None  # Pad am rechten Rand nimmt X und Y
-                if rp:
-                    node.append(NodeWire(rp["x"], rp["y"], "IO0_X"))
+                # ... und zu den IOBs am Rand, die X direkt nehmen (rechts auch Y)
+                rp = None
+                for side, z, d, w in PAD_DIRECT:
+                    p = edge_pad(side, z, y if side in "LR" else x)
+                    if d == "out" and p and edge_clb(side, p["seg"]) == (x, y):
+                        node.append(NodeWire(p["x"], p["y"], w))
+                        rp = p if side == "R" else rp
                 if len(node) > 1:
                     ch.add_node(node)
                 if is_clb(x + 1, y):
                     ch.add_node([NodeWire(x, y, "Y"), NodeWire(x + 1, y, "YL")])
                 elif rp:
                     ch.add_node([NodeWire(x, y, "Y"), NodeWire(rp["x"], rp["y"], "IO0_Y")])
+    # Eingänge der Pads direkt auf Pins der Rand-CLB
+    for side, z, d, w in PAD_DIRECT:
+        for p in PAD_INFO:
+            if d == "in" and p["side"] == side and p["z"] == z:
+                cx, cy = edge_clb(side, p["seg"])
+                ch.add_node([NodeWire(p["x"], p["y"], f"IO{z}_O"), NodeWire(cx, cy, w)])
     # Long Lines über das ganze Routing-Feld (Kacheln 1..9, von Randkanal zu Randkanal); die der Zeile
     # darunter erreicht D, die der Spalte rechts X und Y, die der Randkanäle die Pads (oben über die
     # LH der Pad-Kacheln, links über deren LV)

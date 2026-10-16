@@ -3,7 +3,8 @@
 #   flow.sh [design.v] [weitere nextpnr-Optionen, z.B. --gui]
 # Pins: design.pcf neben design.v (set_io <Port> <Pin>) wird automatisch verwendet.
 # Umgebungsvariablen: YOSYS=..., NEXTPNR=... (z.B. Debug-Binaries aus build/*-debug), PCF=... (andere
-# PCF-Datei)
+# PCF-Datei), SEED=... (Seed für nextpnr, ohne SEED der nextpnr-Standard), FREQ=... (Timing-Ziel in
+# MHz, Standard 5)
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/../../scripts/lib.sh"
 
@@ -18,6 +19,11 @@ OUT="$FAT_BUILD/flows/xc2064"
 PCF="${PCF:-${DESIGN%.v}.pcf}"
 PCF_OPT=()
 [[ -f "$PCF" ]] && PCF_OPT=(--vopt "pcf=$PCF")
+# Seed: ohne SEED der nextpnr-Standard, SEED=n übergibt --seed n. Ein --seed in den weitergereichten
+# Optionen hat Vorrang (nextpnr lehnt ein doppeltes --seed ab).
+SEED_OPT=()
+[[ -n "${SEED:-}" ]] && SEED_OPT=(--seed "$SEED")
+for a in "$@"; do [[ "$a" == --seed || "$a" == --seed=* ]] && SEED_OPT=(); done
 BASE="$OUT/$(basename "${DESIGN%.v}")"
 mkdir -p "$OUT"
 
@@ -29,8 +35,8 @@ log "Synthese: $DESIGN"
 	-p "synth_xc2064 -json $BASE.json" "$DESIGN"
 
 # Timing-Ziel: zeitgemäße Taktfrequenz (MHz). Ein 16-Bit-Zähler ohne Carry-Logik schafft ~6 MHz.
-log "Place & Route: nextpnr-himbaechel --device XC2064 --freq ${FREQ:-5} ${PCF_OPT[*]}"
+log "Place & Route: nextpnr-himbaechel --device XC2064 --freq ${FREQ:-5} ${SEED_OPT[*]} ${PCF_OPT[*]}"
 "$NEXTPNR" --device XC2064 --json "$BASE.json" --write "$BASE.pnr.json" -l "$BASE.nextpnr.log" \
-	--freq "${FREQ:-5}" "${PCF_OPT[@]}" "$@"
+	--freq "${FREQ:-5}" "${SEED_OPT[@]}" "${PCF_OPT[@]}" "$@"
 
 log "Ergebnisse: $OUT"
