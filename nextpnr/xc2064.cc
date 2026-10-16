@@ -220,6 +220,55 @@ struct Xc2064Impl : HimbaechelAPI
         log_info("Placed %d IO buffers at their constrained pads.\n", bound);
     }
 
+    // Takte ohne Pin-Zuordnung an die Taktpads: Nur von P9 (GCLK) und P43 (ACLK) erreicht ein Takt K
+    // aller CLBs, sonst belegt er in jeder CLB einen der Eingänge A-D. Das Netz mit den meisten
+    // Speicherelementen bekommt das erste freie Taktpad, das nächste das zweite.
+    void bind_clock_pads()
+    {
+        dict<IdString, int> clk_users; // Netz -> Anzahl Speicherelemente
+        for (auto &cell : ctx->cells) {
+            const CellInfo *ci = cell.second.get();
+            const NetInfo *clk = ci->type == id_XC2000_DFF ? ci->getPort(id_CLK) : nullptr;
+            if (clk)
+                clk_users[clk->name]++;
+        }
+        std::vector<std::pair<int, NetInfo *>> clocks;
+        for (auto &u : clk_users) {
+            NetInfo *net = ctx->nets.at(u.first).get();
+            const CellInfo *drv = net->driver.cell;
+            if (!drv || drv->type != id_XC2000_INBUF)
+                continue; // abgeleiteter Takt: läuft über das allgemeine Routing
+            if (drv->bel != BelId() || drv->attrs.count(id_BEL)) {
+                if (!is_global_clock(net))
+                    log_info("Clock '%s' (%s) is constrained to a pad without clock buffer, uses CLB inputs.\n",
+                             ctx->nameOf(net), storage_elements(u.second).c_str());
+                continue;
+            }
+            clocks.push_back({u.second, net});
+        }
+        std::stable_sort(clocks.begin(), clocks.end(),
+                         [](const auto &a, const auto &b) { return a.first > b.first; });
+        auto next = clocks.begin();
+        for (int c = 0; c < 2 && next != clocks.end(); c++) {
+            BelId pad = clock_pads[c];
+            if (!ctx->checkBelAvail(pad))
+                continue;
+            ctx->bindBel(pad, next->second->driver.cell, STRENGTH_FIXED);
+            log_info("Clock '%s' (%s) placed at %s (%s).\n", ctx->nameOf(next->second),
+                     storage_elements(next->first).c_str(), ctx->getBelName(pad)[1].c_str(ctx),
+                     c ? "ACLK" : "GCLK");
+            ++next;
+        }
+        for (; next != clocks.end(); ++next)
+            log_info("Clock '%s' (%s): no free clock pad, uses CLB inputs.\n", ctx->nameOf(next->second),
+                     storage_elements(next->first).c_str());
+    }
+
+    static std::string storage_elements(int n)
+    {
+        return std::to_string(n) + (n == 1 ? " storage element" : " storage elements");
+    }
+
     void pack() override
     {
         if (ctx->args.options.count("pcf"))
@@ -231,6 +280,7 @@ struct Xc2064Impl : HimbaechelAPI
         };
         h.remove_nextpnr_iobs(top_ports);
         bind_constrained_pads();
+        bind_clock_pads();
         h.replace_constants(CellTypePort(id_VCC_DRV, id_VCC), CellTypePort(id_GND_DRV, id_GND), {}, {}, id_VCC,
                             id_GND);
         int moved = route_q_feedback_to_i2();

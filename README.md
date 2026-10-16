@@ -53,7 +53,10 @@ mit Zellen anderer Bibliotheken verwechseln lassen: `XC2000_LUT3`, `XC2000_LUT4`
 Pins stehen in einer **PCF-Datei** wie bei iCE40 (`set_io [-nowarn] <Port> <Pin>`, Busse als
 `leds[0]`, Pins als PLCC68-Namen P2…P68), die nextpnr mit `--vopt pcf=<Datei>` liest. `flow.sh` nimmt
 `design.pcf` neben `design.v` automatisch, `PCF=…` wählt eine andere. Ohne Eintrag entscheidet der
-Placer. Alternativ geht weiterhin `(* LOC="P9" *)` an einem `XC2000_INBUF`/`XC2000_OUTBUF` im
+Placer, nur Takte legt `pack()` selbst an die Taktpads: das Netz mit den meisten Speicherelementen an
+P9 (GCLK), das nächste an P43 (ACLK), soweit diese Pads frei sind. Nur von dort erreicht ein Takt K
+aller CLBs, sonst belegt er in jeder CLB mit Speicherelement einen der Eingänge A–D. Ein Takt, der per
+Constraint an einem anderen Pad liegt, bleibt dort (Hinweis im Log). Alternativ geht weiterhin `(* LOC="P9" *)` an einem `XC2000_INBUF`/`XC2000_OUTBUF` im
 Verilog, die PCF-Datei hat Vorrang. `pack()` belegt diese Pads schon beim Packen fest (wie GateMate),
 die GUI zeigt sie also direkt nach „Pack“ als belegt. Ein BEL-Attribut setzt es dabei nicht, sonst würde
 der Placer die Zellen ein zweites Mal binden wollen.
@@ -88,8 +91,8 @@ Ein schon geroutetes `*.pnr.json` lädt nextpnr in der GUI direkt. Auf der Komma
 
 | Beispiel | Inhalt | Ergebnis |
 |---|---|---|
-| `examples/blinky.v` | 16-Bit-Zähler, Pins in `blinky.pcf` (Takt an P9, alles am oberen Rand) | 20 LUT3, 7 LUT4, 16 FF, je nach Seed 4,9–6,2 MHz. Der nextpnr-Standard-Seed verfehlt das Ziel 5 MHz knapp (4,9 MHz), `flow.sh --seed 1` oder `SEED=1 arch/xc2064/flow.sh` schafft 6,0 MHz. Ohne PCF liegt der Takt nicht am Taktpin P9, belegt dann in jeder CLB den Eingang C, und das Platzieren scheitert. Der kritische Pfad sind die LUT-Ebenen der Zähler-Logik, eine Carry-Kette hatte erst der XC4000 |
-| `examples/latch_sr.v` | FF mit fallender Flanke, FF mit asynchronem Set/Reset, Latch, Pins in `latch_sr.pcf` | 3 Speicherelemente mit `CLKINV`, `S`/`R` bzw. `LATCH` |
+| `examples/blinky.v` | 16-Bit-Zähler, Pins in `blinky.pcf` (Takt an P9, alles am oberen Rand) | 20 LUT3, 7 LUT4, 16 FF, je nach Seed 4,9–6,2 MHz. Der nextpnr-Standard-Seed verfehlt das Ziel 5 MHz knapp (4,9 MHz), `flow.sh --seed 1` oder `SEED=1 arch/xc2064/flow.sh` schafft 6,0 MHz. Ohne PCF (`PCF=/dev/null`) legt `pack()` den Takt selbst an P9, je nach Seed 4,9–6,1 MHz. Der kritische Pfad sind die LUT-Ebenen der Zähler-Logik, eine Carry-Kette hatte erst der XC4000 |
+| `examples/latch_sr.v` | FF mit fallender Flanke, FF mit asynchronem Set/Reset, Latch, Pins in `latch_sr.pcf` | 3 Speicherelemente mit `CLKINV`, `S`/`R` bzw. `LATCH`. Ohne PCF kommt `clk` an P9 und das Latch-Enable `en` an P43 |
 
 In VS Code laufen die allgemeinen Tasks *Arch: Flow ausführen* und *Arch: Flow mit nextpnr-GUI* sowie
 die Debug-Konfigurationen für Architekturen (Run and Debug). Als Namen jeweils `xc2064` eingeben.
