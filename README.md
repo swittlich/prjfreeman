@@ -97,13 +97,15 @@ Eine CLB (grauer Rahmen) folgt dem Blockschaltbild im Datenblatt, von links nach
 | Ausgänge | Schienen F, FG, G, Q mit den Multiplexern X und Y, beide rechts hinaus durch den Kanal (PIP-Kästchen an ihren Spuren und Long Lines) |
 
 Wie im Datenblatt läuft A über die Logik zum Set-Multiplexer. C, das Taktsignal K von GCLK/ACLK und D
-laufen unter der Logik zu Takt und Reset. F, FG und G laufen über dem Speicherelement zu den
-Ausgängen, Q läuft unten herum zurück zu den LUTs. Die Direktleitungen von X laufen am rechten Rand
-hinauf und hinab zu den Pins der CLB darüber bzw. darunter, Y läuft durch den Kanal weiter in die
-B-Zeile der CLB rechts. Keine Leitung läuft durch ein Bauteil. Pips zwischen
-Routing und CLB-Pins sind Kästchen am Kreuzungspunkt, Pips in der CLB ein Abgriff mit Punkt an der
-Schiene. Ein benutzter Pip zeigt zusätzlich seinen Weg durch den Multiplexer. Im FG-Modus leuchten die
-Multiplexer von F und G, der Rahmen und der F/G-Multiplexer.
+laufen unter der Logik zu Takt und Reset. F, FG und G laufen über dem Speicherelement zu den Ausgängen,
+Q läuft unten herum zurück zu den LUTs. Die Direktleitungen von X laufen am rechten Rand hinauf und
+hinab zu den Pins der CLB darüber bzw. darunter, Y läuft durch den Kanal weiter in die B-Zeile der CLB
+rechts. Keine Leitung läuft durch ein Bauteil. Im Routing zeichnet jedes Wire seine ganze Leitung bis zu
+den Kreuzungen, an denen es geschaltet werden kann, auch die Direktleitungen und die Anschlüsse der
+Pads. Der Pip ist dort nur das Kästchen, wie Metall und Schalter im Chip. Markiert man ein Wire,
+leuchtet also die ganze Leitung. In der CLB sind Pips ein Abgriff mit Punkt an der Schiene. Ein
+benutzter Pip zeigt zusätzlich seinen Weg durch den Multiplexer. Im FG-Modus leuchten die Multiplexer
+von F und G, der Rahmen und der F/G-Multiplexer.
 
 Weil nextpnr selbst mit y nach oben zeichnet, spiegelt `xc2064.cc` die Grafik. Weil nextpnr `drawPip`
 den kanonischen Draht eines Knotens übergibt (der in einer Nachbarkachel liegen kann), sucht

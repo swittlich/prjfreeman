@@ -366,9 +366,11 @@ struct Xc2064Impl : HimbaechelAPI
     //   Ausgangsschienen mit den Multiplexern X und Y, beide rechts hinaus durch den Kanal rechts
     // A läuft über die Logik zum Set-Multiplexer, C, K und D darunter zu Takt und Reset, Q unten herum
     // zurück zu den LUTs. Direktverbindungen: X am rechten Rand hinauf zu C/D der CLB darüber und hinab
-    // zu A/B der CLB darunter, Y weiter nach rechts zu B der Nachbar-CLB. Keine Leitung läuft durch ein Bauteil. Pips: Kästchen an Kreuzungen (Routing <->
-    // Pin) und Abgriffe mit Punkt (Schiene -> Multiplexer-Eingang). Unbenutzte Pips sind gedämpft, ein
-    // benutzter Pip zeigt zusätzlich seinen Weg durch den Multiplexer.
+    // zu A/B der CLB darunter, Y weiter nach rechts zu B der Nachbar-CLB.
+    // Keine Leitung läuft durch ein Bauteil. Im Routing zeichnet jedes Wire seine ganze Leitung bis zu den
+    // Kreuzungen, an denen es geschaltet werden kann, der Pip nur das Kästchen dort (wie Metall und
+    // Schalter im Chip). In der CLB sind Pips Abgriffe mit Punkt (Schiene -> Multiplexer-Eingang).
+    // Unbenutzte Pips sind gedämpft, ein benutzter Pip zeigt zusätzlich seinen Weg durch den Multiplexer.
     static constexpr int LAST = 9; // 9. Switch-Matrix-Spalte/-Zeile
 
     float flip_y(float y) const { return ctx->getGridDimY() - y; }
@@ -429,6 +431,8 @@ struct Xc2064Impl : HimbaechelAPI
     static constexpr float M_X0 = 0.594, M_X1 = 0.616, FGF_X1 = 0.628;
     static constexpr float FF_X0 = 0.726, FF_X1 = 0.814, FF_PIN_X = 0.77;
     static constexpr float X_DN_X = 0.93, X_UP_X = 0.942; // Direktverbindungen von X nach unten/oben
+    // ... und ihre Abzweige in der Nachbarkachel: zu A und B der CLB darunter, zu D und C der CLB darüber
+    static constexpr float XT_A_Y = 0.31, XT_B_Y = 0.335, XB_D_Y = 0.975, XB_C_Y = 0.965;
     static constexpr float LV0_X = 0.27, LV1_X = 0.30, DIR_X = 0.31, YL_X = 0.32;
     // Zeilen (y)
     static constexpr float A_ROW = 0.392, B_ROW = 0.476, C_ROW = 0.523; // Eingänge von links
@@ -695,15 +699,35 @@ struct Xc2064Impl : HimbaechelAPI
         return Geom{};
     }
 
-    // Punkt auf einer Leitung, der einem anderen Punkt am nächsten liegt
-    static void anchor(const Geom &gm, float px, float py, float &x, float &y)
+    // Anschluss eines Pad-Pins (z: Pad, p: 0 = I, 1 = O): ein Stück vom Pad weg auf eine eigene
+    // Querleitung, die die erreichbaren Spuren und Long Lines kreuzt. horiz: Pads oben/unten, die
+    // Querleitung liegt waagerecht bei y = at; sonst senkrecht bei x = at. lo..hi: ihre Ausdehnung.
+    struct PadLine
     {
-        if (gm.kind == G_HTRACK)
-            x = std::clamp(px, gm.a, gm.b), y = gm.y;
-        else if (gm.kind == G_VTRACK)
-            x = gm.x, y = std::clamp(py, gm.a, gm.b);
+        bool horiz;
+        float px, py, at, lo, hi;
+    };
+    PadLine pad_line(Loc loc, int z, int p) const
+    {
+        Geom pin = geom(loc, GFX_WIRE_IO0_I + 3 * z + p);
+        char s = io_side(loc);
+        bool horiz = s == 'T' || s == 'B';
+        // gestaffelt nach dem Kanal: das zweite Pad am nächsten Kanal liegt weiter außen, damit es sich
+        // nicht mit dem ersten Pad der Nachbarkachel überdeckt (am Rand nutzt es den eigenen Kanal)
+        int idx = horiz ? loc.x : loc.y, slot = (z == 1 && idx < LAST) ? 1 : 0;
+        float off = (0.025f + 0.015f * p + 0.03f * slot) * (s == 'T' || s == 'L' ? 1 : -1);
+        PadLine pl{horiz, pin.x, pin.y, (horiz ? pin.y : pin.x) + off, horiz ? pin.x : pin.y, 0};
+        pl.hi = pl.lo;
+        auto add = [&pl](float v) { pl.lo = std::min(pl.lo, v), pl.hi = std::max(pl.hi, v); };
+        for (int t = 0; t < 4; t++) {
+            Geom tr = geom(loc, GFX_WIRE_IO0_T00 + 4 * z + t);
+            add(horiz ? tr.x : tr.y);
+        }
+        if (horiz)
+            add(LV0_X), add(LV1_X);
         else
-            x = gm.x, y = gm.y;
+            add(0.27); // LH
+        return pl;
     }
 
     void drawGroup(std::vector<GraphicElement> &g, GroupId group, Loc loc) override
@@ -769,15 +793,28 @@ struct Xc2064Impl : HimbaechelAPI
             float ox = mux_x(m) + MUX_W, oy = mux_out_y(m);
             draw_mux(g, style, loc, mux_x(m), m.y_top, ox, mux_bot(m));
             switch (m.out) {
-            case GFX_WIRE_X: // durch den Kanal rechts bis zur Long Line, Direktleitungen hinab und hinauf
+            case GFX_WIRE_X: // durch den Kanal rechts bis zur Long Line, Direktleitungen hinauf und hinab
                 poly(g, style, loc, {{ox, oy}, {1 + LV0_X + 0.01, oy}});
-                poly(g, style, loc, {{X_DN_X, oy}, {X_DN_X, 1.335}});
-                poly(g, style, loc, {{X_UP_X, oy}, {X_UP_X, -0.035}});
-                dot(g, style, loc, X_DN_X, oy);
-                dot(g, style, loc, X_UP_X, oy);
+                if (loc.y > 1) { // zu D und C der CLB darüber
+                    poly(g, style, loc,
+                         {{X_UP_X, oy}, {X_UP_X, XB_C_Y - 1}, {DIR_X, XB_C_Y - 1}, {DIR_X, C_ROW - 1}});
+                    poly(g, style, loc, {{X_UP_X, XB_D_Y - 1}, {D_PIN_X, XB_D_Y - 1}});
+                    dot(g, style, loc, X_UP_X, oy);
+                    dot(g, style, loc, X_UP_X, XB_D_Y - 1);
+                }
+                if (loc.y < ctx->getGridDimY() - 2) { // zu A und B der CLB darunter
+                    poly(g, style, loc,
+                         {{X_DN_X, oy}, {X_DN_X, 1 + XT_B_Y}, {DIR_X, 1 + XT_B_Y}, {DIR_X, 1 + B_ROW}});
+                    poly(g, style, loc, {{X_DN_X, 1 + XT_A_Y}, {A_PIN_X, 1 + XT_A_Y}});
+                    dot(g, style, loc, X_DN_X, oy);
+                    dot(g, style, loc, X_DN_X, 1 + XT_A_Y);
+                }
                 break;
-            case GFX_WIRE_Y: // durch den Kanal rechts zu B der Nachbar-CLB
-                poly(g, style, loc, {{ox, oy}, {1 + YL_X, oy}});
+            case GFX_WIRE_Y: // durch den Kanal rechts, weiter zu B der Nachbar-CLB
+                if (loc.x < ctx->getGridDimX() - 2)
+                    poly(g, style, loc, {{ox, oy}, {1 + YL_X, oy}, {1 + YL_X, B_ROW}});
+                else
+                    poly(g, style, loc, {{ox, oy}, {1 + LV1_X + 0.01, oy}});
                 break;
             case GFX_WIRE_FF_S: // Set von oben
                 poly(g, style, loc, {{ox, oy}, {FF_PIN_X, oy}, {FF_PIN_X, FF_Y0}});
@@ -863,6 +900,43 @@ struct Xc2064Impl : HimbaechelAPI
             return;
         }
 
+        // Pad-Pin: Markierung am Pad, eigene Querleitung über die erreichbaren Spuren und Long Lines
+        if (tilewire >= GFX_WIRE_IO0_I && tilewire <= GFX_WIRE_IO1_T) {
+            int z = (tilewire - GFX_WIRE_IO0_I) / 3, p = (tilewire - GFX_WIRE_IO0_I) % 3;
+            Geom pin = geom(loc, tilewire);
+            poly(g, style, loc, {{pin.x - 0.008, pin.y}, {pin.x + 0.008, pin.y}});
+            poly(g, style, loc, {{pin.x, pin.y - 0.008}, {pin.x, pin.y + 0.008}});
+            if (p == 2)
+                return; // T: nur GND/VCC
+            PadLine pl = pad_line(loc, z, p);
+            if (pl.horiz) {
+                poly(g, style, loc, {{pl.px, pl.py}, {pl.px, pl.at}});
+                poly(g, style, loc, {{pl.lo, pl.at}, {pl.hi, pl.at}});
+                if (pl.px > pl.lo && pl.px < pl.hi)
+                    dot(g, style, loc, pl.px, pl.at);
+            } else {
+                poly(g, style, loc, {{pl.px, pl.py}, {pl.at, pl.py}});
+                poly(g, style, loc, {{pl.at, pl.lo}, {pl.at, pl.hi}});
+                if (pl.py > pl.lo && pl.py < pl.hi)
+                    dot(g, style, loc, pl.at, pl.py);
+            }
+            // Taktpuffer: P9 speist GCLK, P43 ACLK (Pads oben bzw. unten, Querleitung waagerecht)
+            for (int c = 0; c < 2 && p == 1; c++) {
+                Loc cl = ctx->getBelLocation(clock_pads[c]);
+                if (cl.x != loc.x || cl.y != loc.y || cl.z != z)
+                    continue;
+                Geom tp = geom(loc, c ? GFX_WIRE_ACLK_SRC : GFX_WIRE_GCLK_SRC);
+                if (tp.x >= pl.lo && tp.x <= pl.hi) {
+                    poly(g, style, loc, {{tp.x, pl.at}, {tp.x, tp.y}});
+                    dot(g, style, loc, tp.x, pl.at);
+                } else { // über den Kanal hinweg zur Taktleitung der CLB daneben
+                    poly(g, style, loc, {{YL_X, pl.at}, {YL_X, XT_A_Y}, {tp.x, XT_A_Y}, {tp.x, tp.y}});
+                    dot(g, style, loc, YL_X, pl.at);
+                }
+            }
+            return;
+        }
+
         // Routing und IO
         if (is_sm_pin(tilewire)) {
             // Segmente zeichnet ihr Anfang (E bzw. S); N/W nur als Kanalstück zu den Pads am Rand.
@@ -893,7 +967,7 @@ struct Xc2064Impl : HimbaechelAPI
         case G_VTRACK:
             line(g, style, x + gm.x, y + gm.a, x + gm.x, y + gm.b);
             break;
-        case G_POINT: // Pad-Pin: kleine Markierung
+        case G_POINT: // Taktpuffer: kleine Markierung
             line(g, style, x + gm.x - 0.008, y + gm.y, x + gm.x + 0.008, y + gm.y);
             line(g, style, x + gm.x, y + gm.y - 0.008, x + gm.x, y + gm.y + 0.008);
             break;
@@ -960,8 +1034,7 @@ struct Xc2064Impl : HimbaechelAPI
             } else if (src_id == GFX_WIRE_LH) {
                 pip_box(g, style, loc, A_PIN_X, 0.27);
             } else if (src_id == GFX_WIRE_XT) { // Direktverbindung von X der CLB darüber
-                poly(g, style, loc, {{X_DN_X, 0.31}, {A_PIN_X, 0.31}});
-                pip_box(g, style, loc, A_PIN_X, 0.31);
+                pip_box(g, style, loc, A_PIN_X, XT_A_Y);
             }
             return;
         case GFX_WIRE_B:
@@ -972,14 +1045,9 @@ struct Xc2064Impl : HimbaechelAPI
                 pip_box(g, style, loc, trk(t), py);
             } else if (src_id == GFX_WIRE_LV0 || src_id == GFX_WIRE_LV1) {
                 pip_box(g, style, loc, src_id == GFX_WIRE_LV0 ? LV0_X : LV1_X, py);
-            } else if (src_id == GFX_WIRE_XT) { // Direktverbindung von X der CLB darüber
-                poly(g, style, loc, {{X_DN_X, 0.335}, {DIR_X, 0.335}, {DIR_X, py}});
-                pip_box(g, style, loc, DIR_X, py);
-            } else if (src_id == GFX_WIRE_XB) { // Direktverbindung von X der CLB darunter
-                poly(g, style, loc, {{X_UP_X, 1 - 0.035}, {DIR_X, 1 - 0.035}, {DIR_X, py}});
+            } else if (src_id == GFX_WIRE_XT || src_id == GFX_WIRE_XB) { // Direktverbindung von X darüber/darunter
                 pip_box(g, style, loc, DIR_X, py);
             } else if (src_id == GFX_WIRE_YL) { // Direktverbindung von Y der CLB links
-                poly(g, style, loc, {{YL_X, Y_Y}, {YL_X, py}});
                 pip_box(g, style, loc, YL_X, py);
             }
             return;
@@ -990,8 +1058,7 @@ struct Xc2064Impl : HimbaechelAPI
             } else if (src_id == GFX_WIRE_LHB) {
                 pip_box(g, style, loc, D_PIN_X, 1.27);
             } else if (src_id == GFX_WIRE_XB) { // Direktverbindung von X der CLB darunter
-                poly(g, style, loc, {{X_UP_X, 0.975}, {D_PIN_X, 0.975}});
-                pip_box(g, style, loc, D_PIN_X, 0.975);
+                pip_box(g, style, loc, D_PIN_X, XB_D_Y);
             }
             return;
         case GFX_WIRE_K: // globale Taktnetze
@@ -1008,23 +1075,24 @@ struct Xc2064Impl : HimbaechelAPI
             return;
         }
 
-        // IO-Kacheln: Pad-Pins <-> Kanalstück bzw. Long Line, Taktpuffer
-        Geom a = geom(loc, src_id), b = geom(loc, dst_id);
-        if (a.kind == G_NONE || b.kind == G_NONE)
-            return; // z.B. Konstanten GND/VCC
-        float x1, y1, x2, y2;
-        if (a.kind == G_POINT) {
-            x1 = a.x, y1 = a.y;
-            anchor(b, x1, y1, x2, y2);
-        } else {
-            x2 = b.x, y2 = b.y;
-            anchor(a, x2, y2, x1, y1);
+        // IO-Kacheln: Kästchen auf der Querleitung des Pad-Pins, wo sie Spur bzw. Long Line kreuzt;
+        // Taktpuffer: Kästchen am Anfang der Taktleitung
+        int32_t pin = (src_id >= GFX_WIRE_IO0_I && src_id <= GFX_WIRE_IO1_T) ? src_id : dst_id;
+        if (pin < GFX_WIRE_IO0_I || pin > GFX_WIRE_IO1_T)
+            return;
+        int z = (pin - GFX_WIRE_IO0_I) / 3, p = (pin - GFX_WIRE_IO0_I) % 3;
+        Geom o = geom(loc, pin == src_id ? dst_id : src_id);
+        if (o.kind == G_NONE || p == 2)
+            return; // Konstanten GND/VCC
+        if (o.kind == G_POINT) {
+            pip_box(g, style, loc, o.x, o.y + (o.y > 0.5 ? -0.03 : 0.03));
+            return;
         }
-        poly(g, style, loc, {{x1, y1}, {x2, y2}});
-        if (a.kind != G_POINT)
-            pip_box(g, style, loc, x1, y1);
-        else if (b.kind != G_POINT)
-            pip_box(g, style, loc, x2, y2);
+        PadLine pl = pad_line(loc, z, p);
+        if (pl.horiz)
+            pip_box(g, style, loc, o.x, pl.at);
+        else
+            pip_box(g, style, loc, pl.at, o.y);
     }
 };
 
