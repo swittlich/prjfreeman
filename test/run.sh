@@ -18,8 +18,8 @@
 #   Fmax   kleinste Frequenz aller Takte nach dem Routing, mit FMIN=… (MHz) ist ein Wert darunter ein Fehler
 #   Routing  Iterationen und Laufzeit von router2 (nur Information)
 # Dazu je Design ein Lauf ohne PCF in jedem weiteren Gehäuse (Spalte PCF: PD48, PC44, PG68) und je ein Lauf
-# mit und ohne PCF mit den Taktpuffern (--vopt clkbuf, Spalte Seed: clkbuf; Bitstream verlangt dann, dass
-# die Konfiguration einen Taktpuffer benutzt).
+# mit und ohne PCF ohne die Taktpuffer (--vopt noclkbuf, Spalte Seed: noclkbuf). Bitstream verlangt
+# zusätzlich, dass die Konfiguration einen Taktpuffer benutzt, bei noclkbuf keinen.
 # Umgebungsvariablen: SEEDS="1 2 3 4 5 6" (zusätzlich zum nextpnr-Standard), PACKAGES="PD48 PC44 PG68",
 # FREQ=5, FMIN=…, TIMEOUT=300, YOSYS=…, NEXTPNR=…, TEST_JOBS (parallele Läufe, Standard JOBS, höchstens 10)
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -152,8 +152,12 @@ pnr_run() {
 		}
 		bit=ok
 		bitstream "$run" || bit=FEHLER
-		# Lauf mit --vopt clkbuf: mindestens ein Taktpuffer muss benutzt sein
-		[[ $s != clkbuf ]] || grep -q '^mux CLK\.\(AA\|II\)\.I ' "$run.cfg.txt" || bit=FEHLER
+		# Taktpuffer: benutzt (jedes Beispiel hat einen Takt vom Pad), mit --vopt noclkbuf keiner
+		if grep -q '^mux CLK\.\(AA\|II\)\.I ' "$run.cfg.txt"; then
+			[[ $s != noclkbuf ]] || bit=FEHLER
+		else
+			[[ $s == noclkbuf ]] || bit=FEHLER
+		fi
 		if [[ $SHIRRIFF -eq 1 && -f "$run.rbt" ]]; then
 			shir=ok
 			python3 "$ARCH/tools/xc2064shirriff" "$run.rbt" 2>"$run.shirriff.log" || shir=FEHLER
@@ -229,11 +233,11 @@ for d in "${designs[@]}"; do
 	for pkg in $PACKAGES; do
 		queue "$dir/package-$pkg" "$pkg" default --vopt "package=$pkg"
 	done
-	# mit den Taktpuffern (--vopt clkbuf, Spalte Seed: clkbuf), mit und ohne PCF
+	# ohne die Taktpuffer (--vopt noclkbuf, Spalte Seed: noclkbuf), mit und ohne PCF
 	for m in "${modes[@]}"; do
-		opts=(--vopt clkbuf)
+		opts=(--vopt noclkbuf)
 		[[ $m == mit ]] && opts+=(--vopt "pcf=$pcf")
-		queue "$dir/clkbuf-$m" "$m" clkbuf "${opts[@]}"
+		queue "$dir/noclkbuf-$m" "$m" noclkbuf "${opts[@]}"
 	done
 done
 

@@ -2,7 +2,7 @@
 // (PRESCALE Takte) schaltet den Zähler weiter, solange en ist; die Anzeige wechselt mit jedem Takt die Stelle
 // (an, low-aktiv) und zeigt deren Ziffer (seg = gfedcba, low-aktiv), beides registriert. Synchrones Reset rst.
 // PRESCALE 16 belegt 54 CLBs (routet in allen Läufen des Regressionstests schnell), 10 58 CLBs, 50 61 CLBs
-// (dann läuft router2 in einigen Läufen in den Timeout, siehe README).
+// (dann läuft router2 in einzelnen Läufen in den Timeout, siehe README).
 module bcd7seg #(
 	parameter PRESCALE = 16
 ) (

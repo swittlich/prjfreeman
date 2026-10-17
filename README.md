@@ -45,7 +45,7 @@ git submodule update --init arch/xc2064/shirriff-xc2064 arch/xc2064/openxc2064
 | CLB-Eingänge | Alle Quellen aus `clb.js` mit ihren Mux-Codes: A 6–7 (Kanal oben, long.1, X von oben), B 10 (local.1-5, Y von links, long.1/2, GCLK, X von oben), C 8 (local.1-5, long.1/2, X von unten), D 6–7 (Kanal unten, long.1, X von unten), K 2 (long.2, GCLK); am Rand andere Leitungen und Pads | `clb.js`; mit allen XACT-Bitstreams und `TEST1.RBT` geprüft |
 | Direktverbindungen | X fest auf A/B der CLB darunter und C/D der CLB darüber, Y fest auf B der CLB rechts (Spur local.6). Am Rand übernehmen Pads diese Quellen | Datenblatt *Direct Interconnect* und Bild 9; Quellen in `clb.js` |
 | Long Lines | Senkrecht 2 je Spalte (Spalte A: long.2–4, Spalte I: long.1–3), waagerecht 1 je Zeile (Zeile A: long.2/3, Zeile I: long.1/2) | Datenblatt *Longlines*: zusätzliche Long Line neben jeder IOB-Reihe |
-| Taktnetze | GCLK (`CLK.AA.O` oben und `col.*.clk` je Spalte) auf B und K jeder CLB, ACLK (`row.I.clk` unten) über PIPs auf die senkrechten long.2 (Spalte A: long.4) und von dort auf K, B oder C. Die Eingangs-Muxe der Puffer: `CLK.AA.I` (GCLK, 6 Bits) wählt P9, P11, `col.A.local.3`, `col.A.long.3`, `row.A.long.3` oder in der Grundstellung `row.A.local.3`; `CLK.II.I` (ACLK, 8 Bits) P43, P46, `col.I.local.2`, `col.I.long.2`, `row.I.long.1`, in der Grundstellung `row.I.local.2` oder den Quarzoszillator (ohne Bel, nicht im Graphen). Weil ein Puffer immer treibt, sind die PIPs von ACLK auf die long.2 gerichtet: ACLK ist kein freier Leitungsweg. Benutzbar sind die Puffer mit `--vopt clkbuf` (dann läuft ein Takt an P9/P43, der nur Speicherelemente taktet, ganz über seinen Puffer, und `pack()` legt Takte ohne Pin an P9/P43). Ohne die Option läuft ein Takt wie jedes Signal, an K über die senkrechte long.2 der Spalte (so taktet XACT in `COUNTER.BIT`) | Datenblatt *Longlines*, Bild 8b; Codes aus `MAKEBITS` (siehe [Taktpuffer](#taktpuffer-eingänge-makebits)) |
+| Taktnetze | GCLK (`CLK.AA.O` oben und `col.*.clk` je Spalte) auf B und K jeder CLB, ACLK (`row.I.clk` unten) über PIPs auf die senkrechten long.2 (Spalte A: long.4) und von dort auf K, B oder C. Die Eingangs-Muxe der Puffer: `CLK.AA.I` (GCLK, 6 Bits) wählt P9, P11, `col.A.local.3`, `col.A.long.3`, `row.A.long.3` oder in der Grundstellung `row.A.local.3`; `CLK.II.I` (ACLK, 8 Bits) P43, P46, `col.I.local.2`, `col.I.long.2`, `row.I.long.1`, in der Grundstellung `row.I.local.2` oder den Quarzoszillator (ohne Bel, nicht im Graphen). Weil ein Puffer immer treibt, sind die PIPs von ACLK auf die long.2 gerichtet: ACLK ist kein freier Leitungsweg. nextpnr benutzt die Puffer standardmäßig: Ein Takt an P9 oder P11 (GCLK) bzw. P43 oder P46 (ACLK), der nur Speicherelemente taktet, läuft ganz über seinen Puffer, und `pack()` legt Takte ohne Pin an diese Pads. `--vopt noclkbuf` sperrt die Eingänge der Puffer, dann läuft ein Takt wie jedes Signal, an K über die senkrechte long.2 der Spalte (so taktet XACT in `COUNTER.BIT`) | Datenblatt *Longlines*, Bild 8b; Codes aus `MAKEBITS` (siehe [Taktpuffer](#taktpuffer-eingänge-makebits)) |
 | Konstanten | Keine Konstanten-Leitung, wie im Original: `pack()` faltet einen konstanten LUT-Eingang in den LUT-Inhalt, lässt Set/Reset = 0 weg und setzt für alles Übrige (konstanter Pad-Ausgang, Set = 1, …) eine LUT mit festem Inhalt ein | – |
 | Gehäuse | `--vopt package=PC68` (Standard, 68-Pin-PLCC, alle 58 Pads, Pin = Pad), `PD48` (48-Pin-DIL, 40 Pads; nur -50), `PC44` (44-Pin-PLCC, 34 Pads; -70, -100) oder `PG68` (68-Pin-PGA, Pins A2…L10, 57 Pads; -50, -70, -100). PCF und LOC nennen den Pin des Gehäuses, der Placer nimmt nur bebondete Pads. Die beiden Data Books weichen an zwei Stellen ab: PC44-Pin 20 liegt 1994 auf P30, 1993 auf P31. Hier gilt 1994, denn beim XC2018 ist PC44-Pin 20 wie P30 des XC2064 der Konfigurationspin LDC (die Familie ist im PC44 pinkompatibel). Den PGA-Pin von P65 nennt 1993 B8, 1994 D8 (kein Randpin); hier B8. Für P43 (XTL2 oder I/O) und RESET nennen beide keinen PGA-Pin (übrig sind K10 und L10), P43 fehlt deshalb im PG68 | *Configuration Pin Assignments* (Data Book 1994 S. 2-214, 1993 S. 2-206, XC2018 S. 2-207) und *Component Availability* (1993 S. 2-208, 1994 S. 2-216); `xc2064db/packages.py` |
 | IOBs | **58 Pads mit PLCC68-Namen** (Bel `P9` usw.), je Pad-Kachel bis zu zwei. Alle Verbindungen aus `iob.js`, an den Leitungen **beider Kanäle** am Pad (parallel und senkrecht zum Rand): Ausgang zum Pad (Bel-Pin I, im Datenblatt „O“) über einen Multiplexer mit Mux-Code aus 6–9 Quellen (Einzelsegmente, Long Lines, X/Y der Rand-CLB, an P9 GCLK, an P43 ACLK). Tristate T (1 schaltet den Treiber ab) über einen Multiplexer aus 2 Einzelsegmenten und 2 Long Lines des Kanals parallel zum Rand. Eingang vom Pad (Bel-Pin O) über PIP-Bits auf 5–7 Leitungen und fest auf Eingänge der Rand-CLB. Der Modus des Ausgangstreibers ist Konfiguration (Code des T-Multiplexers), kein Pip: an (`XC2000_OUTBUF`), aus (`XC2000_INBUF`) oder Tristate (`XC2000_TOBUF`, `XC2000_IOBUF`, T geroutet). Direktverbindungen: rechts nehmen beide Pads X und Y einer CLB der Spalte H (das erste die daneben, das zweite die darüber); oben treibt das erste Pad A und B, das zweite nimmt X der CLB links; unten treibt das erste Pad C und D, das zweite nimmt X; links treibt das zweite Pad B der CLB darüber, P24 B der CLB HA. Das IOB oben verhält sich damit wie eine CLB darüber, das unten wie eine darunter | `iob.js`; Datenblatt, Abschnitte *I/O Block* und *Direct Interconnect*. Die Kreuzungen ohne PIP-Bit an P9 und P11 (`col.A.io2`) und der Eingang von P43 (`@aclk_in`) sind Quellen der Taktpuffer-Muxe; 6 weitere Kreuzungen mit `col.A.io2` (P13–P23) fehlen, für `MAKEBITS` sind sie nicht programmierbar |
@@ -98,9 +98,12 @@ yosys siehe unten.
 Pins stehen in einer **PCF-Datei** wie bei iCE40 (`set_io [-nowarn] <Port> <Pin>`, Busse als
 `leds[0]`, Pins als Pin des Gehäuses: P2…P68 im PC68, P1…P48 im PD48), die nextpnr mit
 `--vopt pcf=<Datei>` liest. `flow.sh` nimmt `design.pcf` neben `design.v` automatisch, `PCF=…` wählt eine
-andere. Ohne Eintrag entscheidet der Placer. Mit `--vopt clkbuf` legt `pack()` Takte selbst an die
-Taktpads: das Netz mit den meisten Speicherelementen an P9 (GCLK), das nächste an P43 (ACLK), soweit
-diese Pads frei sind. Ein Takt, der per Constraint an einem anderen Pad liegt, bleibt dort (Hinweis im
+andere. Ohne Eintrag entscheidet der Placer. Takte legt `pack()` selbst an die Pads der Taktpuffer (außer
+mit `--vopt noclkbuf`): das Netz mit den meisten Speicherelementen an GCLK (P9, ist es belegt P11), das
+nächste an ACLK (P43, sonst P46, etwa im PG68 ohne P43). Liegt an einem Pad eines Puffers schon ein Takt
+per Constraint, bleibt der Puffer diesem; ein Takt, der per Constraint an einem Pad ohne Puffer liegt,
+bleibt dort (Hinweis im Log). Takten zwei Netze an P9 und P11 (bzw. P43 und P46) nur Speicherelemente,
+bekommt das mit den meisten den Puffer und das andere läuft über das allgemeine Routing (Hinweis im
 Log). Alternativ geht weiterhin
 `(* LOC="P9" *)` an einem IO-Puffer im Verilog, die PCF-Datei hat Vorrang. `pack()` belegt diese Pads schon beim Packen fest (wie GateMate),
 die GUI zeigt sie also direkt nach „Pack“ als belegt. Ein BEL-Attribut setzt es dabei nicht, sonst würde
@@ -149,7 +152,9 @@ Rundlauf über den Bitstream (Stufe 5) dauert der ganze Test etwa 4 min, mit `sh
 Iterationen) knapp 4 min, wenn sonst nichts läuft. Seit die Läufe parallel laufen (Stufe 9, 10 Jobs),
 braucht der ganze Test mit der Gegenprobe über Shirriffs Decoder knapp 1 min, mit den größeren Designs
 aus Stufe 10 (136 Läufe, der längste mit 1238 Iterationen) knapp 3 min, mit den Läufen über die
-Taktpuffer aus Stufe 11 (152 Läufe) 2,5–3 min.
+Taktpuffer aus Stufe 11 (152 Läufe) 2,5–3 min. Mit den Taktpuffern als Standard (Stufe 12, der Takt
+der Beispiele läuft über GCLK statt über die long.2 jeder Spalte) braucht der längste Lauf 276
+Iterationen, der ganze Test gut 2 min.
 
 ## Ablauf
 
@@ -186,14 +191,14 @@ etwa `--device XC2064-50` für den XC2064-PD48 (ohne Zusatz -70).
 
 | Beispiel | Inhalt | Ergebnis |
 |---|---|---|
-| `examples/blinky.v` | 16-Bit-Zähler, Pins in `blinky.pcf` (Takt an P9, alles am oberen Rand) | 20 LUT3, 7 LUT4, 16 FF, bei -70 je nach Seed 14,0–14,6 MHz (Standard-Seed 14,4 MHz, `flow.sh --seed 1` oder `SEED=1 arch/xc2064/flow.sh` ebenso), bei -50 9,7 MHz (im PD48 9,6 MHz). Ohne PCF (`PCF=/dev/null`) je nach Seed 13,8–14,5 MHz. Die Werte verschieben sich mit jeder Änderung an Routing-Graph und Timing. Der kritische Pfad sind die LUT-Ebenen der Zähler-Logik, eine Carry-Kette hatte erst der XC4000 |
-| `examples/latch_sr.v` | FF mit fallender Flanke, FF mit asynchronem Set/Reset, Latch, Pins in `latch_sr.pcf` | 3 Speicherelemente mit `CLKINV`, `S`/`R` bzw. `LATCH`. Mit `--vopt clkbuf` und ohne PCF kommt `clk` an P9 und das Latch-Enable `en` an P43 |
-| `examples/tristate.v` | 4-Bit-Bus (`inout`) mit Low-aktivem `oe_n`, Tristate-Ausgang `tout` mit `en_n`, Pins in `tristate.pcf` (alles am oberen Rand) | 4 `XC2000_IOBUF`, 1 `XC2000_TOBUF`, 7 LUT3, 1 LUT4, 8 FF, bei -70 je nach Seed 53–57 MHz (-50: 40 MHz). T aller Bus-Bits hängt ohne Logik am Pad von `oe_n` und läuft über eine Long Line des oberen Randkanals (die T-Quellen dort: 2 Einzelsegmente und 2 Long Lines). Mit High-aktivem Enable (Inverter in einer CLB, deren Ausgänge die waagerechten Long Lines nicht erreichen, also nur über die Spuren zu den T) war der Bus dort nicht routbar |
-| `examples/shiftreg.v` | 8-Bit-Schieberegister mit parallelem Laden (`load`, `din`) und Enable (`en`, `sin`), Pins in `shiftreg.pcf` (Steuerung und `din` oben, `q` rechts) | 8 `XC2000_FGM`, 8 FF in 8 CLBs: jedes Bit ist `load ? din[i] : (en ? q[i-1] : q[i])`, F liest `din[i]` an D, G `en`, `q[i-1]` und das eigene Q, B = `load` wählt. Bei -70 je nach Seed 52–56,5 MHz (-50: 39 MHz). Mit `synth_xc2064 -nofgm` 9 LUT3 und 7 LUT4 in 16 CLBs, 35,1 MHz (Standard-Seed mit PCF) |
-| `examples/inreg.v` | Eingänge über das FF im IOB: `d` in die IOBs, eine zweite Stufe in den CLBs und ein Flankendetektor (`rise`); Pins in `inreg.pcf` (`d[1:0]` oben, `d[3:2]` links, also zwei K-Muxe am selben Takt) | 4 `XC2000_INFF`, 4 FF, 8 LUT3 in 8 CLBs. Der Takt kommt oben über `row.A.long.3` in den K-Mux, links über `col.A.long.3`. Bei -70 je nach Seed 52–55 MHz. Mit `synth_xc2064 -noiobff` 8 FF und 12 LUT3 in 10 CLBs, 57,8 MHz (Standard-Seed mit PCF): T_LI (11 ns) ist länger als Clock-to-Out einer CLB, und der Takt der IOBs läuft über K-Mux und Taktleitung der Seite |
-| `examples/uart_tx.v` | UART-Sender 8N1 (`start`, `data`, `tx`, `busy`; 434 Takte je Bit), Pins in `uart_tx.pcf` (Eingänge oben, `tx` und `busy` rechts) | 23 FF, 7 `XC2000_FGM`, 23 LUT3, 22 LUT4 in 46 CLBs. Bei -70 je nach Seed 15,2–16,2 MHz, router2 braucht bis zu 311 Iterationen. Das Schieberegister mit Laden nutzt den Mux-Modus FGM |
-| `examples/ampel.v` | Zustandsautomat: Fußgängerampel mit Taster, gemeinsamem Phasenzähler und gespeicherter Anforderung, Pins in `ampel.pcf` | 9 FF (Zustand binär wie im RTL, siehe yosys oben), 17 LUT3, 6 LUT4 in 19 CLBs, je nach Seed 18,4–19,9 MHz |
-| `examples/bcd7seg.v` | Vierstelliger BCD-Zähler mit Vorteiler und gemultiplexter 7-Segment-Anzeige (registriert), Pins in `bcd7seg.pcf` (Segmente rechts, Stellen unten); das große Design | 33 FF, 45 LUT3, 23 LUT4 in 54 der 64 CLBs (84 %), `pack()` legt 14 LUT3 paarweise in CLBs. Je nach Seed 13,3–14,0 MHz, alle Läufe in höchstens 37 s. Mit `PRESCALE=10` 58 CLBs (91 %): alle Läufe bestehen, einer braucht aber 3 min; mit `PRESCALE=50` 61 CLBs (95 %): 4 von 17 Läufen laufen nach 300 s mit noch 7–37 überbelegten Drähten in den Timeout (echter Stau im Debug-Build) |
+| `examples/blinky.v` | 16-Bit-Zähler, Pins in `blinky.pcf` (Takt an P9, alles am oberen Rand) | 20 LUT3, 7 LUT4, 16 FF, bei -70 je nach Seed 13,9–14,3 MHz (Standard-Seed 14,0 MHz, Seed 1 mit `flow.sh --seed 1` oder `SEED=1 arch/xc2064/flow.sh` 14,1 MHz), bei -50 9,5 MHz (im PD48 9,4 MHz). Ohne PCF (`PCF=/dev/null`) je nach Seed 13,7–14,4 MHz. Der Takt läuft über GCLK; ohne die Taktpuffer (`--vopt noclkbuf`, über die long.2 jeder Spalte) 14,4 MHz mit PCF. Die Werte verschieben sich mit jeder Änderung an Routing-Graph und Timing. Der kritische Pfad sind die LUT-Ebenen der Zähler-Logik, eine Carry-Kette hatte erst der XC4000 |
+| `examples/latch_sr.v` | FF mit fallender Flanke, FF mit asynchronem Set/Reset, Latch, Pins in `latch_sr.pcf` | 3 Speicherelemente mit `CLKINV`, `S`/`R` bzw. `LATCH`. Ohne PCF kommt `clk` an P9 (GCLK) und das Latch-Enable `en` an P43 (ACLK), im PG68 an P46 |
+| `examples/tristate.v` | 4-Bit-Bus (`inout`) mit Low-aktivem `oe_n`, Tristate-Ausgang `tout` mit `en_n`, Pins in `tristate.pcf` (alles am oberen Rand) | 4 `XC2000_IOBUF`, 1 `XC2000_TOBUF`, 7 LUT3, 1 LUT4, 8 FF, bei -70 je nach Seed 54–56,5 MHz (-50: 38,8 MHz). T aller Bus-Bits hängt ohne Logik am Pad von `oe_n` und läuft über eine Long Line des oberen Randkanals (die T-Quellen dort: 2 Einzelsegmente und 2 Long Lines). Mit High-aktivem Enable (Inverter in einer CLB, deren Ausgänge die waagerechten Long Lines nicht erreichen, also nur über die Spuren zu den T) war der Bus dort nicht routbar |
+| `examples/shiftreg.v` | 8-Bit-Schieberegister mit parallelem Laden (`load`, `din`) und Enable (`en`, `sin`), Pins in `shiftreg.pcf` (Steuerung und `din` oben, `q` rechts) | 8 `XC2000_FGM`, 8 FF in 8 CLBs: jedes Bit ist `load ? din[i] : (en ? q[i-1] : q[i])`, F liest `din[i]` an D, G `en`, `q[i-1]` und das eigene Q, B = `load` wählt. Bei -70 je nach Seed 54–57 MHz (-50: 39 MHz). Mit `synth_xc2064 -nofgm` 9 LUT3 und 7 LUT4 in 16 CLBs, 34,8 MHz (Standard-Seed mit PCF) |
+| `examples/inreg.v` | Eingänge über das FF im IOB: `d` in die IOBs, eine zweite Stufe in den CLBs und ein Flankendetektor (`rise`); Pins in `inreg.pcf` (`d[1:0]` oben, `d[3:2]` links, also zwei K-Muxe am selben Takt) | 4 `XC2000_INFF`, 4 FF, 8 LUT3 in 8 CLBs. Der Takt kommt oben und links über GCLK in die K-Muxe, ohne die Taktpuffer (`--vopt noclkbuf`) oben über `row.A.long.3`, links über `col.A.long.3`. Bei -70 je nach Seed 53–55 MHz. Mit `synth_xc2064 -noiobff` 8 FF und 12 LUT3 in 10 CLBs, 58,8 MHz (Standard-Seed mit PCF): T_LI (11 ns) ist länger als Clock-to-Out einer CLB, und der Takt der IOBs läuft über K-Mux und Taktleitung der Seite |
+| `examples/uart_tx.v` | UART-Sender 8N1 (`start`, `data`, `tx`, `busy`; 434 Takte je Bit), Pins in `uart_tx.pcf` (Eingänge oben, `tx` und `busy` rechts) | 23 FF, 7 `XC2000_FGM`, 23 LUT3, 22 LUT4 in 46 CLBs. Bei -70 je nach Seed 15,5–16,2 MHz, router2 braucht bis zu 142 Iterationen. Das Schieberegister mit Laden nutzt den Mux-Modus FGM |
+| `examples/ampel.v` | Zustandsautomat: Fußgängerampel mit Taster, gemeinsamem Phasenzähler und gespeicherter Anforderung, Pins in `ampel.pcf` | 9 FF (Zustand binär wie im RTL, siehe yosys oben), 17 LUT3, 6 LUT4 in 19 CLBs, je nach Seed 18,9–19,8 MHz |
+| `examples/bcd7seg.v` | Vierstelliger BCD-Zähler mit Vorteiler und gemultiplexter 7-Segment-Anzeige (registriert), Pins in `bcd7seg.pcf` (Segmente rechts, Stellen unten); das große Design | 33 FF, 45 LUT3, 23 LUT4 in 54 der 64 CLBs (84 %), `pack()` legt 14 LUT3 paarweise in CLBs. Je nach Seed 13,4–14,0 MHz, alle Läufe in höchstens 4 s. Mit `PRESCALE=10` 58 CLBs (91 %): alle Läufe bestehen in höchstens 8 s (ohne die Taktpuffer braucht einer 105 s, bis Stufe 11 einer 3 min); mit `PRESCALE=50` 61 CLBs (95 %): 1 von 17 Läufen (PD48) läuft nach 300 s mit noch 1 überbelegten Draht in den Timeout, einer braucht 226 s (echter Stau im Debug-Build; bis Stufe 11, mit dem Takt über die long.2, liefen 4 von 17 in den Timeout) |
 
 In VS Code laufen die allgemeinen Tasks *Arch: Flow ausführen* und *Arch: Flow mit nextpnr-GUI* sowie
 die Debug-Konfigurationen für Architekturen (Run and Debug). Als Namen jeweils `xc2064` eingeben.
@@ -203,8 +208,9 @@ die Debug-Konfigurationen für Architekturen (Run and Debug). Als Namen jeweils 
 `test/run.sh [design.v …]` synthetisiert jedes Beispiel (ohne Argument alle `examples/*.v`), routet es
 mit dem nextpnr-Standard-Seed und den Seeds 1–6, mit und ohne PCF, dazu ohne PCF je einmal in den
 Gehäusen PD48, PC44 und PG68 (Spalte PCF, `PACKAGES=…` ändert die Liste) und mit und ohne PCF je einmal
-mit den Taktpuffern (`--vopt clkbuf`, Spalte Seed `clkbuf`; dort verlangt die Spalte Bitstream zusätzlich,
-dass die Konfiguration einen Taktpuffer benutzt), und prüft jeden Lauf. Zeilen
+ohne die Taktpuffer (`--vopt noclkbuf`, Spalte Seed `noclkbuf`), und prüft jeden Lauf. Die Spalte
+Bitstream verlangt zusätzlich, dass die Konfiguration einen Taktpuffer benutzt (jedes Beispiel hat einen
+Takt vom Pad), bei `noclkbuf` keinen. Zeilen
 `// erwartet: <Zelltyp> <Anzahl>` im Design prüfen schon die Synthese (`shiftreg.v` verlangt 8
 `XC2000_FGM`, fällt der Pass aus, schlägt der Test fehl). Die Läufe laufen parallel, höchstens
 `TEST_JOBS` gleichzeitig (Standard `JOBS`, nie mehr als 10); die Zeilen erscheinen trotzdem in fester
@@ -546,12 +552,15 @@ python3 arch/xc2064/tools/xc2064lca design.cfg.txt -o DESIGN.LCA   # dann in DOS
 python3 arch/xc2064/tools/xc2064pack design.cfg.txt -o design.rbt --compare DESIGN.RBT --free-bidi
 ```
 
-Ergebnis (17.10.2026) für 43 Läufe: aus dem Regressionstest je Beispiel der Standard-Seed mit und ohne PCF,
-`--vopt clkbuf` mit und ohne PCF und das PD48 (40), dazu 3 einer Variante von `bcd7seg.v`. 2 Bitstreams sind
-bitgleich, die übrigen 41 weichen nur in 552 Bits von Repowering-Puffern ab, und zwar nur auf Segmenten,
-deren Richtung das Routing nicht festlegt.
+Ergebnis (17.10.2026) für 43 Läufe: aus dem Regressionstest je Beispiel der Standard-Seed mit und ohne PCF
+(damals ohne Taktpuffer), mit den Taktpuffern (damals `--vopt clkbuf`) mit und ohne PCF und das PD48 (40),
+dazu 3 einer Variante von `bcd7seg.v`. 2 Bitstreams sind bitgleich, die übrigen 41 weichen nur in 552 Bits
+von Repowering-Puffern ab, und zwar nur auf Segmenten, deren Richtung das Routing nicht festlegt.
 Alle Pips, Switch-Verbindungen, Muxe (auch beide Taktpuffer, GCLK an den K-Muxen in `inreg.v`), CLBs
-mit ihren Gleichungen, IOBs und Optionen setzt MAKEBITS genau wie `xc2064pack`.
+mit ihren Gleichungen, IOBs und Optionen setzt MAKEBITS genau wie `xc2064pack`. Ebenso die 4 Läufe mit
+Takten an P11 und P46 aus Stufe 12 (`blinky.v` mit dem Takt an P11, `latch_sr.v` mit `clk` an P46 und
+`en` an P11, mit `clk` an P9 und `en` an P11 sowie ohne PCF im PG68): 1 bitgleich, 3 bis auf Puffer
+ohne vom Routing festgelegte Richtung.
 
 ## Ausbaustufen
 
@@ -598,8 +607,8 @@ mit ihren Gleichungen, IOBs und Optionen setzt MAKEBITS genau wie `xc2064pack`.
   5. erledigt: Konfiguration von CLB und IOB dekodiert (`xc2064db.blocks`, mit `TEST1.LCA` geprüft),
      `--vopt out=`, `xc2064pack` im RBT-Format von XACT (alle XACT-Bitstreams bitgenau im Rundlauf),
      `xc2064netlist` und der Rundlauf im Regressionstest (Text → RBT → zurück → Netzliste → formaler
-     Vergleich, 42 von 42), Gehäuse PD48. Die Taktpuffer benutzt nextpnr nur mit `--vopt clkbuf` (bis
-     Stufe 11 ließ sich ein so geroutetes Design nicht packen)
+     Vergleich, 42 von 42), Gehäuse PD48. Die Taktpuffer benutzte nextpnr nur mit `--vopt clkbuf` (bis
+     Stufe 11 ließ sich ein so geroutetes Design nicht packen, seit Stufe 12 sind sie Standard)
   6. erledigt: Mux-Modus FGM: Primitiv `XC2000_FGM`, Bel `FGM` auf den Leitungen von F, G und FG,
      `pack()` und Legalität (beide Tabellen mit eigenen Eingängen, Q an Eingang 3, festes S wird LUT3),
      `--vopt out=` mit `BASE:FGM`, `xc2064netlist`, der yosys-Pass `xc2064_fgm` und das Beispiel
@@ -629,6 +638,15 @@ mit ihren Gleichungen, IOBs und Optionen setzt MAKEBITS genau wie `xc2064pack`.
      PCF). Die PIPs von ACLK auf die long.2 sind gerichtet. `xc2064lca` schreibt eine Konfiguration als
      LCA für MAKEBITS; iob.js-Einträge ohne Leitung (X/Y direkt ans Pad, GCLK an P9.O und den K-Muxen)
      haben dafür jetzt ihre Kreuzung. `xc2064db.bitstream` liest auch RBT-Dateien von MAKEBITS 5.2.0
+  12. erledigt: Taktpuffer als Standard. `--vopt noclkbuf` schaltet sie ab, `--vopt clkbuf` bleibt erlaubt
+     und ändert nichts mehr. P11 und P46 sind weitere Pads von GCLK bzw. ACLK: `pack()` legt Takte ohne Pin
+     dorthin, wenn P9 bzw. P43 belegt oder nicht bebondet ist (PG68: ACLK über P46), und `preRoute()` führt
+     auch dort einen Takt, der nur Speicherelemente taktet, ganz über den Puffer (zwei solche Takte an
+     einem Puffer: der mit den meisten Speicherelementen bekommt ihn). Im Regressionstest laufen die beiden
+     Zusatzläufe je Design ohne Puffer (`noclkbuf`), alle anderen müssen einen benutzen; MAKEBITS setzt
+     Takte an P11 und P46 wie `xc2064pack`. Damit hängt jeder Bitstream mit einem Takt vom Pad an den
+     Puffer-Codes aus MAKEBITS; wer für einen ersten Versuch am Chip nur Bits programmieren will, die auch
+     XACT-Bitstreams benutzen, nimmt `--vopt noclkbuf`
 
   Offen auf dem Weg zum geladenen Chip (alles braucht einen echten XC2064): der erste Versuch mit dem
   STM32-Lader (D/P-Pin) und die Flanke des IOB-FF (laut Data Book steigend) sowie Shirriffs K-Mux-Codes.

@@ -219,7 +219,7 @@ PIP_CFG, PIP_CLKBUF = 1, 2  # Art der Zusatzdaten eines Pips
 @dataclass
 class PipExtra(BBAStruct):
     """Zusatzdaten eines Pips aus dem Graphen: die Zeile im Textformat (xc2064db/config.py), die ihn
-    programmiert (nextpnr --vopt out=), und die Art (Taktpuffer-Eingang: nur mit --vopt clkbuf benutzbar)"""
+    programmiert (nextpnr --vopt out=), und die Art (Taktpuffer-Eingang: mit --vopt noclkbuf gesperrt)"""
     cfg: IdString
     kind: int
 

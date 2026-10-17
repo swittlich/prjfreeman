@@ -86,8 +86,12 @@ NPNR_PACKED_STRUCT(struct Xc2064PipExtraPOD {
 enum PipKind
 {
     PIP_CFG = 1,
-    PIP_CLKBUF = 2, // Eingang eines Taktpuffers: nur mit --vopt clkbuf
+    PIP_CLKBUF = 2, // Eingang eines Taktpuffers: mit --vopt noclkbuf gesperrt
 };
+
+// Die beiden Taktpuffer und die Pads, die ihr Eingangs-Mux direkt wählen kann (Codes aus MAKEBITS)
+constexpr const char *CLOCK_BUFFERS[2] = {"GCLK", "ACLK"};
+constexpr const char *CLOCK_PADS[2][2] = {{"P9", "P11"}, {"P43", "P46"}};
 
 struct Xc2064Impl : HimbaechelAPI
 {
@@ -104,8 +108,11 @@ struct Xc2064Impl : HimbaechelAPI
                                "A2...L10)");
         specific.add_options()("out", po::value<std::string>(),
                                "write the configuration as text for xc2064pack (format: arch/xc2064/xc2064db/config.py)");
-        specific.add_options()("clkbuf", "use the clock buffers GCLK/ACLK: clocks at P9/P43 run over them, clocks "
-                                         "without a pin constraint are placed there");
+        specific.add_options()("noclkbuf", "do not use the clock buffers GCLK/ACLK: clocks run over the general "
+                                           "routing like any other signal");
+        specific.add_options()("clkbuf", "use the clock buffers GCLK (pads P9, P11) and ACLK (P43, P46), the default: "
+                                         "clocks at these pads run over them, clocks without a pin constraint are "
+                                         "placed there");
         return specific;
     }
 
@@ -131,7 +138,8 @@ struct Xc2064Impl : HimbaechelAPI
     {
         h.init(ctx);
         HimbaechelAPI::init(ctx);
-        // Pads nach Pin des Gehäuses, die bebondeten IOBs und die beiden Taktpins (Bel-Namen P9, P43)
+        // Pads nach Pin des Gehäuses, die bebondeten IOBs und die Pads der Taktpuffer (Bel-Namen P9 und P11
+        // für GCLK, P43 und P46 für ACLK)
         for (BelId bel : ctx->getBels()) {
             if (ctx->getBelType(bel) != id_IOB)
                 continue;
@@ -141,12 +149,15 @@ struct Xc2064Impl : HimbaechelAPI
             }
             side_iobs[side_index(io_side(ctx->getBelLocation(bel)))].push_back(bel);
             IdString name = ctx->getBelName(bel)[1];
-            if (name == ctx->id("P9"))
-                clock_pads[0] = bel;
-            else if (name == ctx->id("P43"))
-                clock_pads[1] = bel;
+            for (int b = 0; b < 2; b++)
+                for (int i = 0; i < 2; i++)
+                    if (name == ctx->id(CLOCK_PADS[b][i]))
+                        clock_pads[b][i] = bel;
         }
-        clkbuf = ctx->args.options.count("clkbuf") > 0;
+        // Taktpuffer: Standard, --vopt noclkbuf schaltet sie ab (--vopt clkbuf bleibt erlaubt)
+        clkbuf = ctx->args.options.count("noclkbuf") == 0;
+        if (!clkbuf && ctx->args.options.count("clkbuf"))
+            log_error("--vopt clkbuf und --vopt noclkbuf schließen sich aus\n");
     }
 
     // Das Routing des XC2064 ist knapp (4 Spuren je Kanal, 81 Kreuzungen): router2 löst Überlastung
@@ -259,9 +270,10 @@ struct Xc2064Impl : HimbaechelAPI
         log_info("Placed %d IO buffers at their constrained pads.\n", bound);
     }
 
-    // Takte ohne Pin-Zuordnung an die Taktpads: Nur von P9 (GCLK) und P43 (ACLK) erreicht ein Takt K
-    // aller CLBs, sonst belegt er in jeder CLB einen der Eingänge A-D. Das Netz mit den meisten
-    // Speicherelementen bekommt das erste freie Taktpad, das nächste das zweite.
+    // Takte ohne Pin-Zuordnung an die Taktpads: Nur über die Taktpuffer GCLK (Pads P9, P11) und ACLK (P43, P46)
+    // erreicht ein Takt K aller CLBs, sonst belegt er in jeder CLB einen der Eingänge A-D. Jeder Puffer nimmt ein
+    // Netz: das mit den meisten Speicherelementen bekommt GCLK, das nächste ACLK, jeweils am ersten freien Pad.
+    // Liegt an einem Pad des Puffers schon ein Takt per Constraint, bleibt der Puffer diesem.
     void bind_clock_pads()
     {
         dict<IdString, int> clk_users; // Netz -> Anzahl Speicherelemente
@@ -271,6 +283,7 @@ struct Xc2064Impl : HimbaechelAPI
             if (clk)
                 clk_users[clk->name]++;
         }
+        std::array<bool, 2> taken{};
         std::vector<std::pair<int, NetInfo *>> clocks;
         for (auto &u : clk_users) {
             NetInfo *net = ctx->nets.at(u.first).get();
@@ -278,9 +291,12 @@ struct Xc2064Impl : HimbaechelAPI
             if (!is_pad_input(net))
                 continue; // abgeleiteter Takt: läuft über das allgemeine Routing
             if (drv->bel != BelId() || drv->attrs.count(id_BEL)) {
-                if (!is_global_clock(net))
+                int b = clock_buffer(net);
+                if (b < 0)
                     log_info("Clock '%s' (%s) is constrained to a pad without clock buffer, uses CLB inputs.\n",
                              ctx->nameOf(net), storage_elements(u.second).c_str());
+                else
+                    taken[b] = true;
                 continue;
             }
             clocks.push_back({u.second, net});
@@ -288,18 +304,22 @@ struct Xc2064Impl : HimbaechelAPI
         std::stable_sort(clocks.begin(), clocks.end(),
                          [](const auto &a, const auto &b) { return a.first > b.first; });
         auto next = clocks.begin();
-        for (int c = 0; c < 2 && next != clocks.end(); c++) {
-            BelId pad = clock_pads[c];
-            if (!ctx->checkBelAvail(pad) || !bonded.count(pad))
+        for (int b = 0; b < 2 && next != clocks.end(); b++) {
+            if (taken[b])
                 continue;
-            ctx->bindBel(pad, next->second->driver.cell, STRENGTH_FIXED);
-            log_info("Clock '%s' (%s) placed at %s (%s).\n", ctx->nameOf(next->second),
-                     storage_elements(next->first).c_str(), ctx->getBelName(pad)[1].c_str(ctx),
-                     c ? "ACLK" : "GCLK");
-            ++next;
+            for (BelId pad : clock_pads[b]) {
+                if (pad == BelId() || !ctx->checkBelAvail(pad) || !bonded.count(pad))
+                    continue;
+                ctx->bindBel(pad, next->second->driver.cell, STRENGTH_FIXED);
+                log_info("Clock '%s' (%s) placed at %s (%s).\n", ctx->nameOf(next->second),
+                         storage_elements(next->first).c_str(), ctx->getBelName(pad)[1].c_str(ctx),
+                         CLOCK_BUFFERS[b]);
+                ++next;
+                break;
+            }
         }
         for (; next != clocks.end(); ++next)
-            log_info("Clock '%s' (%s): no free clock pad, uses CLB inputs.\n", ctx->nameOf(next->second),
+            log_info("Clock '%s' (%s): no free clock buffer, uses CLB inputs.\n", ctx->nameOf(next->second),
                      storage_elements(next->first).c_str());
     }
 
@@ -771,10 +791,10 @@ struct Xc2064Impl : HimbaechelAPI
             log_info("%d registered inputs in IOBs (XC2000_INFF).\n", n);
     }
     std::string package = "PC68";
-    std::array<BelId, 2> clock_pads; // P9 (GCLK), P43 (ACLK)
-    bool clkbuf = false;             // --vopt clkbuf: Taktpuffer benutzen
-    pool<IdString> clock_only_nets;  // Takte an P9/P43, die nur FF takten (preRoute)
-    pool<PipId> pad_exit_pips;       // ... und die Pips von dort ins allgemeine Routing
+    std::array<std::array<BelId, 2>, 2> clock_pads; // je Puffer (GCLK, ACLK) seine Pads, CLOCK_PADS
+    bool clkbuf = true;                             // Taktpuffer benutzen (--vopt noclkbuf: nein)
+    pool<IdString> clock_only_nets;                 // Takte an Taktpads, die nur FF takten (preRoute)
+    pool<PipId> pad_exit_pips;                      // ... und die Pips von dort ins allgemeine Routing
 
     IdString lut_in(int i) const { return ctx->idf("I[%d]", i); }
     IdString fgm_in(int half, int i) const { return ctx->idf("%c[%d]", "FG"[half], i); } // half 0: F, 1: G
@@ -887,20 +907,21 @@ struct Xc2064Impl : HimbaechelAPI
         return drv && drv->type.in(id_XC2000_INBUF, id_XC2000_IOBUF) && net->driver.port == id_O;
     }
 
-    bool is_global_clock(const NetInfo *net) const
+    // Taktpuffer, den das Netz von seinem Pad aus erreicht: 0 GCLK (P9, P11), 1 ACLK (P43, P46), -1 keiner
+    int clock_buffer(const NetInfo *net) const
     {
         const CellInfo *drv = net->driver.cell;
         if (!clkbuf_enabled() || !is_pad_input(net))
-            return false;
-        if (drv->bel != BelId())
-            return drv->bel == clock_pads[0] || drv->bel == clock_pads[1];
+            return -1;
+        BelId bel = drv->bel;
         auto fixed = drv->attrs.find(id_BEL);
-        if (fixed == drv->attrs.end())
-            return false;
-        for (BelId pad : clock_pads)
-            if (fixed->second.as_string() == ctx->getBelName(pad).str(ctx))
-                return true;
-        return false;
+        if (bel == BelId() && fixed != drv->attrs.end())
+            bel = ctx->getBelByNameStr(fixed->second.as_string());
+        for (int b = 0; bel != BelId() && b < 2; b++)
+            for (BelId pad : clock_pads[b])
+                if (bel == pad)
+                    return b;
+        return -1;
     }
 
     struct Req
@@ -1067,22 +1088,36 @@ struct Xc2064Impl : HimbaechelAPI
         for (const char *k : {"router2/bbMargin/x", "router2/bbMargin/y"})
             if (!ctx->settings.count(ctx->id(k)))
                 ctx->settings[ctx->id(k)] = std::to_string(margin);
-        // Ein Takt an P9/P43, der nur Speicherelemente taktet, läuft wie bei XACT ganz über seinen Taktpuffer
-        // (GCLK bzw. ACLK, geringer Versatz). Sonst nähme der Router zu nahen CLBs den kürzeren Weg vom Pad
-        // über das allgemeine Routing.
+        // Ein Takt an einem Pad eines Taktpuffers (P9/P11: GCLK, P43/P46: ACLK), der nur Speicherelemente
+        // taktet, läuft wie bei XACT ganz über den Puffer (geringer Versatz). Sonst nähme der Router zu nahen
+        // CLBs den kürzeren Weg vom Pad über das allgemeine Routing. Liegen an beiden Pads eines Puffers solche
+        // Takte, bekommt ihn der mit den meisten Speicherelementen.
         clock_only_nets.clear();
         pad_exit_pips.clear();
-        for (BelId pad : clkbuf_enabled() ? clock_pads : std::array<BelId, 2>{}) {
-            if (pad == BelId())
-                continue;
-            const CellInfo *ci = ctx->getBoundBelCell(pad);
-            const NetInfo *net = ci ? ci->getPort(id_O) : nullptr;
-            if (!net || net->users.entries() == 0)
-                continue;
-            bool only_ff = true;
-            for (auto &u : net->users)
-                only_ff &= u.cell->type == id_XC2000_DFF && u.port == id_CLK;
-            if (!only_ff)
+        for (int b = 0; clkbuf_enabled() && b < 2; b++) {
+            BelId pad;
+            const NetInfo *net = nullptr;
+            for (BelId p : clock_pads[b]) {
+                const CellInfo *ci = p == BelId() ? nullptr : ctx->getBoundBelCell(p);
+                const NetInfo *n = ci ? ci->getPort(id_O) : nullptr;
+                if (!n || n->users.entries() == 0)
+                    continue;
+                bool only_ff = true;
+                for (auto &u : n->users)
+                    only_ff &= u.cell->type == id_XC2000_DFF && u.port == id_CLK;
+                if (!only_ff)
+                    continue;
+                if (net) {
+                    bool more = n->users.entries() > net->users.entries();
+                    log_info("Clocks '%s' and '%s' share %s, '%s' runs over the general routing.\n", ctx->nameOf(net),
+                             ctx->nameOf(n), CLOCK_BUFFERS[b], ctx->nameOf(more ? net : n));
+                    if (!more)
+                        continue;
+                }
+                pad = p;
+                net = n;
+            }
+            if (!net)
                 continue;
             clock_only_nets.insert(net->name);
             Loc pl = ctx->getBelLocation(pad);
@@ -1101,8 +1136,8 @@ struct Xc2064Impl : HimbaechelAPI
         return !(net && pad_exit_pips.count(pip) && clock_only_nets.count(net->name));
     }
 
-    // Die Eingänge der Taktpuffer gibt es nur mit --vopt clkbuf (Codes mit MAKEBITS ermittelt, ohne die
-    // Option bleiben die Ergebnisse wie vorher)
+    // Die Eingänge der Taktpuffer (Codes mit MAKEBITS ermittelt) sperrt --vopt noclkbuf: dann laufen Takte wie
+    // jedes Signal über das allgemeine Routing, an K über die senkrechte long.2 der Spalte
     bool checkPipAvail(PipId pip) const override
     {
         if (clkbuf)
