@@ -87,8 +87,8 @@ struct Xc2064Impl : HimbaechelAPI
         return specific;
     }
 
-    // Geschwindigkeitsstufe aus dem Gerätenamen wie bei Xilinx: XC2064-33, -50, -70 (Umlaufrate in MHz),
-    // ohne Zusatz -70
+    // Geschwindigkeitsstufe aus dem Gerätenamen wie bei Xilinx: XC2064-50, -70, -100, -130 (Umlaufrate in
+    // MHz), ohne Zusatz -70
     void init_database(Arch *arch) override
     {
         init_uarch_constids(arch);
@@ -1735,7 +1735,7 @@ struct Xc2064Arch : HimbaechelArch
         std::string d = device;
         for (auto &c : d)
             c = std::toupper(static_cast<unsigned char>(c));
-        return d == "XC2064" || d == "XC2064-33" || d == "XC2064-50" || d == "XC2064-70";
+        return d == "XC2064" || d == "XC2064-50" || d == "XC2064-70" || d == "XC2064-100" || d == "XC2064-130";
     }
     std::unique_ptr<HimbaechelAPI> create(const std::string &device) override
     {

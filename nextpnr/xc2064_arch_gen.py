@@ -34,8 +34,8 @@
 #     Konstanten:     keine Leitung (wie im Original); pack() faltet sie in LUT-Inhalte oder setzt eine LUT ein
 #   Repowering-Puffer an den Sektionsgrenzen sind kein Pip: ein Puffer ist nie aus, seine Richtung folgt aus
 #   dem Routing (xc2064db.graph.bidi_bit).
-#   Timing: RC-Modell wie im Datenblatt (Interconnect Performance) mit drei Geschwindigkeitsstufen, siehe
-#   set_timings().
+#   Timing: CLB und IOB aus dem Data Book 1994 (Stufen -70, -100, -130, dazu -50 abgeleitet), Interconnect
+#   als RC-Modell wie im Datenblatt (Interconnect Performance), siehe DATABOOK und set_timings().
 from os import path
 import re
 import sys
@@ -266,10 +266,12 @@ class Builder:
         for w in ("FF_D", "FF_CLK", "FF_S", "FF_R"):
             self.wire(xy, w, "FF_IN")
         for s, d in (("F_O", "FF_D"), ("FG_O", "FF_D"),
-                     ("K", "FF_CLK"), ("C", "FF_CLK"), ("G_O", "FF_CLK"), ("FG_O", "FF_CLK"),
+                     ("K", "FF_CLK"),
                      ("A", "FF_S"), ("F_O", "FF_S"), ("FG_O", "FF_S"),
                      ("D", "FF_R"), ("G_O", "FF_R"), ("FG_O", "FF_R")):
             self.pip(xy, s, d, "LOCAL")
+        for s, cls in (("C", "CLKC"), ("G_O", "CLKG"), ("FG_O", "CLKG")):  # Takt über C bzw. G
+            self.pip(xy, s, "FF_CLK", cls)
         bels.append(("FF", "DFF", 3, [("D", "FF_D", PinType.INPUT), ("CLK", "FF_CLK", PinType.INPUT),
                                      ("S", "FF_S", PinType.INPUT), ("R", "FF_R", PinType.INPUT),
                                      ("Q", "Q", PinType.OUTPUT)]))
@@ -323,44 +325,74 @@ class Builder:
                 ch.add_node([NodeWire(x, y, w) for x, y, w in wires], timing_class=node_class(node))
 
 
-# Geschwindigkeitsstufen: die Zahl ist die Umlaufrate (Toggle Rate) eines FF in MHz (Datenblatt "Device
-# Performance": FF mit globalem Takt, Q über die Logik zurück an D). Die Tabellen "CLB/IOB Switching
-# Characteristic Guidelines" fehlen in der vorliegenden Kopie des Datenblatts; bis dahin sind die Werte der
-# Logik so aufgeteilt, dass Clock-to-Q + Logik + Setup genau eine Periode der Umlaufrate ergeben.
-SPEED_GRADES = {"33": 70 / 33, "50": 70 / 50, "70": 1.0}  # Faktor gegenüber -70
-T_CKO, T_ILO, T_ILO4, T_ICK = 4500, 6000, 7000, 3800  # ps bei -70: 4,5 + 6,0 + 3,8 = 14,3 ns = 1 / 70 MHz
-# Interconnect (Datenblatt "Interconnect Performance"): eine Kette von Pass-Transistoren ist eine Kette von
-# RC-Gliedern (Widerstand jedes Schalters mal die Kapazität dahinter), die an jedem Treiber neu beginnt. In
-# nextpnr: Schalter (SM, PIP, Eingangs-Mux) unbuffered mit Widerstand R_SW, die Leitungen mit ihrer
-# Kapazität; CLB-Ausgang und Taktpuffer sind Treiber. Ein Einzelsegment hinter einem Schalter kostet so
-# etwa 0,5 ns, eine Long Line 4 ns (Größenordnung, bis zu den Tabellen der Data Books).
+# --- Timing ----------------------------------------------------------------------------------------
+# Werte aus dem Xilinx Programmable Logic Data Book 1994, XC2000 "CLB Switching Characteristic Guidelines"
+# (S. 2-221) und "IOB Switching Guidelines" (S. 2-222), in ns, Maximalwerte. Die Stufe ist die Umlaufrate
+# eines FF in MHz. Die Tabellen von 1994 haben -70, -100, -130; den XC2064 gab es auch als -50 (im PD48
+# nur so, S. 2-216). Dessen Werte stehen erst in älteren Data Books, bis dahin -70 mal 70/50.
+DATABOOK = {
+    #       T_ILO T_QLO T_CKO T_ICK T_CCO T_CIO T_PID T_OP T_THZ T_TON
+    "70": (10.0, 6.0, 10.0, 7.0, 13.0, 20.0, 6.0, 9.0, 15.0, 15.0),
+    "100": (8.0, 6.0, 7.0, 6.0, 9.0, 13.0, 4.0, 7.0, 11.0, 13.0),
+    "130": (5.5, 3.7, 7.0, 2.5, 7.0, 13.0, 3.5, 5.5, 7.0, 11.0),
+}
+DATABOOK["50"] = tuple(v * 70 / 50 for v in DATABOOK["70"])  # abgeleitet, siehe oben
+
+
+def clb_timing(t):
+    """Tabellenwerte auf das Modell verteilen (ps). T_ILO gilt vom PIP am CLB-Eingang bis zum Ausgang im
+    Kanal, schließt also Eingangs-Mux und Ausgangstreiber ein; T_QLO (Q über F/G zum Ausgang) ist die Laufzeit
+    der Funktion selbst. Daraus: LUT = T_QLO, Ausgangstreiber = T_ILO - T_QLO, Clock-to-Q = T_CKO - Treiber,
+    Setup an D = T_ICK - LUT (nicht negativ), Takt über C bzw. G später als über K."""
+    ilo, qlo, cko, ick, cco, cio = t[:6]
+    out = ilo - qlo
+    ps = lambda v: int(round(max(v, 0) * 1000))  # noqa: E731
+    return dict(lut=ps(qlo), out=ps(out), ckq=ps(cko - out), setup=ps(ick - qlo), clk_c=ps(cco - cko),
+                clk_g=ps(cio - qlo - cko), pid=ps(t[6]), op=ps(t[7]), tri=ps(max(t[8], t[9])))
+
+
+# Interconnect: Das Data Book nennt keine Zahlen, nur das Modell ("Interconnect Performance"): eine Kette von
+# Pass-Transistoren ist eine Kette von RC-Gliedern (Widerstand jedes Schalters mal die Kapazität dahinter),
+# die an jedem Treiber neu beginnt. In nextpnr: Schalter (SM, PIP, Eingangs-Mux) unbuffered mit Widerstand
+# R_SW, die Leitungen mit ihrer Kapazität; CLB-Ausgang und Taktpuffer sind Treiber. Geschätzt für -70: ein
+# Einzelsegment hinter einem Schalter etwa 0,5 ns, eine Long Line 4 ns, der Taktpuffer 4 ns; die anderen
+# Stufen im Verhältnis von T_ILO.
 R_SW, R_DRV = 2000000, 1000000  # Milliohm: Pass-Transistor, Ausgangstreiber der CLB
 C_SEG, C_LONG = 250, 2000  # Femtofarad: Einzelsegment, Long Line
 T_GCLK = 4000  # ps: Taktpuffer
 
 
 def set_timings(ch: Chip):
-    tmg = ch.set_speed_grades(sorted(SPEED_GRADES))
-    for speed, s in SPEED_GRADES.items():
-        ps = lambda v: TimingValue(int(round(v * s)))  # noqa: E731
+    tmg = ch.set_speed_grades(sorted(DATABOOK, key=int))
+    for speed, table in DATABOOK.items():
+        s = table[0] / DATABOOK["70"][0]  # Interconnect im Verhältnis von T_ILO
+        c = clb_timing(table)
+        tv = lambda v: TimingValue(int(round(v)))  # noqa: E731
         for name, delay, res, cap, buffered in (
-                ("SM", 300, R_SW, C_SEG, False), ("PIP", 200, R_SW, C_SEG, False),
-                ("INMUX", 1000, R_SW, 0, False), ("GCLK", T_GCLK, 0, 0, True),
-                ("XYDRV", 0, R_DRV, 0, True), ("LOCAL", 0, 0, 0, True)):
-            tmg.set_pip_class(grade=speed, name=name, delay=ps(delay), in_cap=TimingValue(cap),
-                              out_res=ps(res), is_buffered=buffered)
+                ("SM", 300 * s, R_SW * s, C_SEG, False), ("PIP", 200 * s, R_SW * s, C_SEG, False),
+                ("INMUX", 0, R_SW * s, 0, False), ("GCLK", T_GCLK * s, 0, 0, True),
+                ("XYDRV", c["out"], R_DRV * s, 0, True), ("LOCAL", 0, 0, 0, True),
+                ("CLKC", c["clk_c"], 0, 0, True), ("CLKG", c["clk_g"], 0, 0, True)):
+            tmg.set_pip_class(grade=speed, name=name, delay=tv(delay), in_cap=tv(cap), out_res=tv(res),
+                              is_buffered=buffered)
         for name, cap in (("SEG", C_SEG), ("LONG", C_LONG), ("CLKNET", 0)):
             tmg.set_node_class(grade=speed, name=name, delay=TimingValue(0), res=TimingValue(0),
                                cap=TimingValue(cap))
-        lut3 = ch.timing.add_cell_variant(speed, "XC2000_LUT3")
-        for i in range(3):
-            lut3.add_comb_arc(f"I[{i}]", "O", ps(T_ILO))
-        lut4 = ch.timing.add_cell_variant(speed, "XC2000_LUT4")
-        for i in range(4):
-            lut4.add_comb_arc(f"I[{i}]", "O", ps(T_ILO4))
+        for cell, n in (("XC2000_LUT3", 3), ("XC2000_LUT4", 4)):  # T_ILO hängt nicht von der Funktion ab
+            lut = ch.timing.add_cell_variant(speed, cell)
+            for i in range(n):
+                lut.add_comb_arc(f"I[{i}]", "O", tv(c["lut"]))
         dff = ch.timing.add_cell_variant(speed, "XC2000_DFF")
-        dff.add_setup_hold("CLK", "D", ClockEdge.RISING, ps(T_ICK), TimingValue(0))
-        dff.add_clock_out("CLK", "Q", ClockEdge.RISING, ps(T_CKO))
+        dff.add_setup_hold("CLK", "D", ClockEdge.RISING, tv(c["setup"]), TimingValue(0))
+        dff.add_clock_out("CLK", "Q", ClockEdge.RISING, tv(c["ckq"]))
+        # IOB: Pad -> Eingang T_PID, Ausgang -> Pad T_OP, T -> Pad der größere von T_THZ und T_TON
+        for cell, arcs in (("XC2000_INBUF", (("PAD", "O", "pid"),)),
+                           ("XC2000_OUTBUF", (("I", "PAD", "op"),)),
+                           ("XC2000_TOBUF", (("I", "PAD", "op"), ("T", "PAD", "tri"))),
+                           ("XC2000_IOBUF", (("I", "PAD", "op"), ("T", "PAD", "tri"), ("PAD", "O", "pid")))):
+            v = ch.timing.add_cell_variant(speed, cell)
+            for a, b, k in arcs:
+                v.add_comb_arc(a, b, tv(c[k]))
 
 
 def main():

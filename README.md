@@ -9,25 +9,39 @@ Grundlagen:
 - XC2000-Datenblatt
 - Ken Shirriff, [Reverse-engineering the first FPGA chip, the XC2064](https://www.righto.com/2020/09/reverse-engineering-first-fpga-chip.html)
 - sein Bitstream-Decoder [shirriff/xc2064](https://github.com/shirriff/xc2064), aus dessen `clb.js` und `iob.js`
-  die Eingangsmultiplexer der LUTs, die Optionen des Speicherelements und die Pad-Tabelle stammen
+  die Eingangsmultiplexer der CLBs, die Optionen des Speicherelements, die Pad-Tabelle und die
+  Multiplexer und PIPs der IOBs stammen
+- [rates37/openxc2064](https://github.com/rates37/openxc2064) mit Bitstreams aus Xilinx' XACT
+- Xilinx *The Programmable Logic Data Book* 1994 ([bitsavers](https://ftp.mirrorservice.org/sites/www.bitsavers.org/components/xilinx/_dataBooks/1994_Xilinx_Programmable_Logic_Data_Book.pdf)),
+  XC2000-Abschnitt S. 2-216 bis 2-222: Lieferformen und die Timing-Tabellen von CLB und IOB
+
+Beide Repos sind Submodules unter `arch/xc2064` (siehe [Datenquellen](#datenquellen-und-bitstream-werkzeuge)):
+
+```bash
+git submodule update --init arch/xc2064/shirriff-xc2064 arch/xc2064/openxc2064
+```
 
 ## Was nachgebildet ist
 
 | Element | Modell | Quelle / Abweichung |
 |---|---|---|
 | Raster | 8×8 CLBs (X1Y1…X8Y8) plus IO-Ring. Shirriffs 9×9 Kacheln AA…II entsprechen X1Y1…X9Y9. Jede Kachel enthält die Kanäle oberhalb und links ihrer CLB, die 9. Spalte/Zeile nur Routing und Pads | Shirriff |
-| Kanäle, Switch-Matrizen | 9 horizontale und 9 vertikale Kanäle, an ihren 9×9 Kreuzungen je 2 Switch-Matrizen mit 8 Pins (2 je Seite), jeder Pin mit 5 der 7 anderen verbindbar (20 Verbindungen) | Anzahl und Verbindungszahl wie bei Shirriff, das genaue Muster ist angenommen |
-| Einzelsegmente | 4 Spuren je Kanal zwischen benachbarten Switch-Matrizen | Original ähnlich |
+| Routing-Graph | Aus den Daten gebaut (`xc2064db.graph`): jeder Pip ist ein PIP-Bit, ein Magic-Bit einer Switch-Matrix oder ein Mux-Code eines CLB-Eingangs bzw. eines IOB-Multiplexers, die Leitungen tragen Shirriffs bzw. XACTs Namen. Einzige Ausnahme: die Eingänge der beiden Taktpuffer (Bits bekannt, Code nicht) | `XC2064-def.txt`, `draw.js`, `clb.js`, `iob.js`; geprüft mit `TEST1.LCA` (siehe [Datenquellen](#datenquellen-und-bitstream-werkzeuge)) |
+| Switch-Matrizen | 2 je Kreuzung (8.1, 8.2), an den vier Ecken keine, 8 Pins. Innen 20 Verbindungen nach dem Muster der Magic-Bits (jeder Pin mit 5 der 7 anderen), am Rand dasselbe ohne die Pins der fehlenden Seite. 8.1 verbindet senkrecht local.1/2, 8.2 local.3/4 mit je zwei waagerechten Leitungen (in Zeile I gespiegelt) | Magic-Bits; Datenblatt Bild 7b; Gegenprobe `possible_connections` (openxc2064) |
+| Einzelsegmente | Senkrecht local.1-4 von Matrix zu Matrix und die fünfte Leitung local.5, waagerecht 4 (innen local.1/3/4/5, am Rand local.1-4) | Datenblatt *General-Purpose Interconnect*: 5 senkrechte, 4 waagerechte Segmente je eine Blocklänge |
+| Repowering-Puffer | 158, je einer auf jedem Einzelsegment, das eine Grenze der 9 Sektionen kreuzt: senkrecht kurz vor dem Kanal der Zeilen D und G, waagerecht vor dem der Spalten D und G. Ein Bit wählt die Richtung (0: nach unten bzw. rechts, 1: nach oben bzw. links), aus ist er nie. Deshalb trennt er das Segment im Routing-Graphen nicht; die Richtung folgt aus dem Routing (`xc2064db.graph.bidi_bit`), wie bei XACT | Bidi-Bits der Bitkarte (G-Lage = Leitung); Richtung belegt mit `TEST1.RBT` und `AND_OR.BIT` (18 Puffer, kein Widerspruch); Datenblatt *Interconnect* |
+| Fünfte senkrechte Leitung | Läuft an keiner Matrix vorbei. Ihr Stück der Zeile R beginnt an einem Verbindungspunkt oben im Kanal (`row.R.local.0`), kreuzt dort local.3/4 auf der Spur von local.6, knickt auf die Spur von local.5, läuft an der CLB vorbei (B, C, Y) und kreuzt im Kanal darunter noch local.0, local.3 und local.4 | Datenblatt Bild 7b (gestrichelt); belegt durch Netz `p1` in `TEST1.LCA` |
 | Funktionsgeneratoren | `F`, `G` (Primitiv `XC2000_LUT3`): Eingang 1 aus {A, B}, Eingang 2 aus {B, C}, Eingang 3 aus {C, D, **Q**} | `clb.js` |
 | 4-Variablen-Modus | `FG` (`XC2000_LUT4`): Eingänge wie F/G, **B** wählt zwischen F und G (I[3]), belegt beide | `clb.js` |
 | Speicherelement | `XC2000_DFF`: Flipflop oder **Latch** (`LATCH`), Takt aus **K, C oder G**, **invertierbar** (`CLKINV`), asynchrones **Set aus A oder F**, **Reset aus D oder G**, Daten aus F bzw. FG | `clb.js`; Vorrang Reset vor Set angenommen |
-| Ausgänge | X, Y je aus Q, F oder G, beide in den vertikalen Kanal **rechts** der CLB: X an V2, V4 und die 1. vertikale Long Line, Y an V1, V3 und die 2. | `clb.js`; Shirriffs Bitmap (`XC2064-def.txt`, `draw.js`). V5 hat das Modell nicht (4 Spuren je Kanal) |
-| CLB-Eingänge A–D | A aus dem Kanal oberhalb und der Long Line der eigenen Zeile, B/C aus dem Kanal links und je einer vertikalen Long Line, D aus dem Kanal unterhalb und der Long Line der Zeile darunter, dazu die Direktverbindungen (je 6–7 Quellen) | `clb.js`; Original: 6–10 Quellen je Eingang |
-| Direktverbindungen | X → C/D der CLB darüber und A/B der CLB darunter, Y → B der CLB rechts | Datenblatt, Abschnitt *Direct Interconnect* |
-| Long Lines | 1 horizontale je Zeile, 2 vertikale je Spalte (auch Zeile/Spalte I am Rand), bis zu den Pads | Datenblatt, Abschnitt *Longlines* |
-| Taktnetze | K aus **GCLK** (Pin P9, oben links) oder **ACLK** (Pin P43, unten rechts) | Lage der Puffer laut Datenblatt, Zuordnung zu P9/P43 angenommen |
-| IOBs | **58 Pads mit PLCC68-Namen** (Bel `P9` usw.) am Kanalstück **parallel zum Rand** neben einer Rand-CLB: das erste Pad einer Kachel am eigenen Stück, das zweite am vorherigen, je bis zu zwei IOBs pro Stück. Ausgang zum Pad (Bel-Pin I, im Datenblatt „O“) aus den 4 Spuren und der Long Line des Randkanals, Tristate T (1 schaltet den Treiber ab) ebenfalls aus den 4 Spuren und der Long Line oder fest, Eingang vom Pad (Bel-Pin O) auf Spuren und Long Line. Der Ausgangstreiber ist an (`XC2000_OUTBUF`, T offen), aus (`XC2000_INBUF`) oder unter der Kontrolle von T (`XC2000_TOBUF`, `XC2000_IOBUF`), wie die zwei Konfigurationszellen im Datenblatt. Direktverbindungen mit der Rand-CLB: rechts nimmt das erste Pad X und Y; links treibt das zweite Pad B; oben treibt das erste Pad B und das zweite nimmt X; unten treibt das erste Pad C und D und das zweite nimmt X. Das IOB oben verhält sich damit wie eine CLB darüber, das unten wie eine darunter | `iob.js`; Datenblatt, Abschnitte *I/O Block* und *Direct Interconnect*. T hat im Original oben 2 lokale Leitungen und 2 Long Lines als Quellen. Gelatchte Ein-/Ausgänge nicht modelliert, am rechten Rand nimmt nur das erste Pad X/Y (laut `iob.js` auch das zweite) |
-| Timing | LUT3 15 ns, LUT4 18 ns, FF 10 ns Clock-to-Q / 8 ns Setup, Pass-Transistor 2,5 ns | Größenordnung XC2064-70 |
+| Ausgänge | X, Y je aus Q, F oder G, beide in den senkrechten Kanal **rechts** der CLB: X (Zeile io6) auf local.2, local.4 und long.1, Y (Zeile y) auf local.1, local.3, local.5 und long.2. In Spalte H liegen die Kreuzungen im Randkanal: X (auf Höhe der Zeile b) auf local.2, local.4 und long.2, Y auf local.1, local.3, long.1 und long.3 | PIP-Bits der Bitkarte |
+| CLB-Eingänge | Alle Quellen aus `clb.js` mit ihren Mux-Codes: A 6–7 (Kanal oben, long.1, X von oben), B 10 (local.1-5, Y von links, long.1/2, GCLK, X von oben), C 8 (local.1-5, long.1/2, X von unten), D 6–7 (Kanal unten, long.1, X von unten), K 2 (long.2, GCLK); am Rand andere Leitungen und Pads | `clb.js`; mit allen XACT-Bitstreams und `TEST1.RBT` geprüft |
+| Direktverbindungen | X fest auf A/B der CLB darunter und C/D der CLB darüber, Y fest auf B der CLB rechts (Spur local.6). Am Rand übernehmen Pads diese Quellen | Datenblatt *Direct Interconnect* und Bild 9; Quellen in `clb.js` |
+| Long Lines | Senkrecht 2 je Spalte (Spalte A: long.2–4, Spalte I: long.1–3), waagerecht 1 je Zeile (Zeile A: long.2/3, Zeile I: long.1/2) | Datenblatt *Longlines*: zusätzliche Long Line neben jeder IOB-Reihe |
+| Taktnetze | GCLK (`CLK.AA.O` oben und `col.*.clk` je Spalte) auf B und K jeder CLB, ACLK (`row.I.clk` unten) über PIPs auf die senkrechten long.2 (Spalte A: long.4) und von dort auf K, B oder C. Den GCLK-Puffer treibt P9, den ACLK-Puffer P43, als Pip mit den Bits ihrer Eingangs-Muxe `CLK.AA.I` (6) bzw. `CLK.II.I` (8). Welcher Code das Pad wählt und welche anderen Quellen es gibt, ist offen: Shirriff dekodiert diese Muxe nicht, und keiner der XACT-Bitstreams benutzt einen Taktpuffer. Ein Takt an P9/P43, der nur Speicherelemente taktet, läuft ganz über seinen Puffer (`preRoute()`) | Datenblatt *Longlines*, Bild 8b |
+| Konstanten | Keine Konstanten-Leitung, wie im Original: `pack()` faltet einen konstanten LUT-Eingang in den LUT-Inhalt, lässt Set/Reset = 0 weg und setzt für alles Übrige (konstanter Pad-Ausgang, Set = 1, …) eine LUT mit festem Inhalt ein | – |
+| IOBs | **58 Pads mit PLCC68-Namen** (Bel `P9` usw.), je Pad-Kachel bis zu zwei. Alle Verbindungen aus `iob.js`, an den Leitungen **beider Kanäle** am Pad (parallel und senkrecht zum Rand): Ausgang zum Pad (Bel-Pin I, im Datenblatt „O“) über einen Multiplexer mit Mux-Code aus 6–9 Quellen (Einzelsegmente, Long Lines, X/Y der Rand-CLB, an P9 GCLK, an P43 ACLK). Tristate T (1 schaltet den Treiber ab) über einen Multiplexer aus 2 Einzelsegmenten und 2 Long Lines des Kanals parallel zum Rand. Eingang vom Pad (Bel-Pin O) über PIP-Bits auf 5–7 Leitungen und fest auf Eingänge der Rand-CLB. Der Modus des Ausgangstreibers ist Konfiguration (Code des T-Multiplexers), kein Pip: an (`XC2000_OUTBUF`), aus (`XC2000_INBUF`) oder Tristate (`XC2000_TOBUF`, `XC2000_IOBUF`, T geroutet). Direktverbindungen: rechts nehmen beide Pads X und Y einer CLB der Spalte H (das erste die daneben, das zweite die darüber); oben treibt das erste Pad A und B, das zweite nimmt X der CLB links; unten treibt das erste Pad C und D, das zweite nimmt X; links treibt das zweite Pad B der CLB darüber, P24 B der CLB HA. Das IOB oben verhält sich damit wie eine CLB darüber, das unten wie eine darunter | `iob.js`; Datenblatt, Abschnitte *I/O Block* und *Direct Interconnect*. Gelatchte Ein-/Ausgänge nicht modelliert. 8 Kreuzungen in `iob.js` ohne PIP-Bit (`col.A.io2` an P9 und den zweiten Pads links) und der Eingang von P43 in den ACLK-Puffer (`@aclk_in`) fehlen |
+| Timing | Geschwindigkeitsstufen über den Gerätenamen: `XC2064-50`, `-70`, `-100`, `-130` (ohne Zusatz -70; die Zahl ist die Umlaufrate eines FF in MHz). CLB und IOB nach den Tabellen des Data Books, bei -70: T_ILO 10 ns (Eingang bis Ausgang, im Modell 6 ns Funktion = T_QLO plus 4 ns Ausgangstreiber), T_CKO 10 ns (6 ns Clock-to-Q plus Treiber), T_ICK 7 ns (Setup an D also 1 ns), Takt über C 3 ns und über G 4 ns später als über K (aus T_CCO, T_CIO), Pad bis Eingang T_PID 6 ns, Ausgang bis Pad T_OP 9 ns, T bis Pad 15 ns. Interconnect als RC-Kette: jeder Schalter (Switch-Matrix, PIP, Eingangs-Mux) ist ein Widerstand vor der Kapazität der Leitung dahinter, die Kette beginnt an jedem Treiber neu (CLB-Ausgang, Taktpuffer); bei -70 kostet ein Einzelsegment hinter einem Schalter etwa 0,5 ns, eine Long Line 4 ns, der Taktpuffer 4 ns, die anderen Stufen im Verhältnis von T_ILO | Xilinx *Programmable Logic Data Book* 1994, XC2000 *CLB Switching Characteristic Guidelines* (S. 2-221) und *IOB Switching Guidelines* (S. 2-222). Dort stehen nur -70, -100 und -130; -50 (die einzige Stufe im PD48, S. 2-216) ist bis zu einem älteren Data Book -70 mal 70/50. Für das Interconnect nennt das Buch keine Zahlen, nur das RC-Modell (*Interconnect Performance*): R, C und der Taktpuffer sind Schätzungen. Die Repowering-Puffer beenden die RC-Kette im Original, im Modell nicht (eher zu langsam). Set/Reset und das transparente Latch haben keine eigenen Bögen |
 
 Nicht modelliert: der Mux-Modus „FGM“ (zwei unabhängige 3-Variablen-Funktionen, B wählt) und
 gelatchte IOBs.
@@ -44,6 +58,11 @@ gelatchte IOBs.
 
 `pack()` hält LUT und FF als Cluster zusammen. Liegt der eigene FF-Ausgang Q nicht an Eingang 3 des
 LUTs, tauscht `pack()` die Eingänge und permutiert INIT, damit die Q-Rückführung genutzt wird.
+
+Ein konstantes T ist im Original kein Signal, sondern der Modus des IOB (Code des T-Multiplexers), und
+der Routing-Graph hat dafür keine Pips. `pack()` macht deshalb aus `XC2000_TOBUF`/`XC2000_IOBUF` mit
+T = 0 einen `XC2000_OUTBUF` (beim `IOBUF` lesen die Nutzer von O dann direkt I) und mit T = 1 einen
+`XC2000_INBUF` (Hinweis im Log).
 
 Die Primitive heißen mit dem Familienpräfix `XC2000_` (wie `CC_` bei GateMate), damit sie sich nicht
 mit Zellen anderer Bibliotheken verwechseln lassen: `XC2000_LUT3`, `XC2000_LUT4`, `XC2000_DFF` und die
@@ -75,17 +94,19 @@ yosys (`yosys/synth_xc2064.cc`):
 - Die eigenen Zelltypen stehen nicht in yosys' `kernel/constids.inc`. `ID(...)` geht dafür bei
   aktuellem yosys (Twine-IdStrings) nicht, der Pass legt sie mit `design->twines().add(...)` an.
 
-Standard-Router ist `router2`, weil das Routing knapp ist. Er sucht jedes Netz nur in dessen Bounding
-Box plus einem Rand von normalerweise 3 Kacheln. Mit 4 Spuren je Kanal reicht das nicht immer: dann
-wechseln sich zwei Netze an einem Draht ab, und router2 kommt nicht mehr zum Ende (er hat kein
-Abbruchlimit). `preRoute()` setzt den Rand deshalb auf die Chipgröße, wenn die Einstellungen
-`router2/bbMargin/x` und `/y` nicht schon gesetzt sind. Mit `--router router1` scheitern manche Seeds an
-Überlastung, die Option bleibt aber möglich. Auch mit dem großen Rand pendelt router2 bei manchen
-Platzierungen lange (Blinky ohne PCF, Standard-Seed: rund 26.500 Iterationen, 40 s). Manche
-Platzierungen sind gar nicht routbar: Im Regressionstest laufen Blinky mit PCF und Seed 4 sowie Tristate
-mit PCF und Seed 3 in den Timeout. Für Blinky Seed 4 findet auch router1 für das Reset-Netz (16 Senken
-in 15 CLBs) keinen Weg. Der Placer kennt die Belegung der Kanäle nicht, und welche Seeds es trifft,
-ändert sich mit jedem Eingriff in den Routing-Graphen. Die Spalte *Routing* des Tests zeigt das.
+Standard-Router ist `router2`. Er sucht jedes Netz nur in dessen Bounding Box plus einem Rand von
+normalerweise 3 Kacheln. Bei knappen Kanälen reicht das nicht immer, dann wechseln sich zwei Netze an
+einem Draht ab, und router2 kommt nicht mehr zum Ende (er hat kein Abbruchlimit). `preRoute()` setzt den
+Rand deshalb auf die Chipgröße, wenn die Einstellungen `router2/bbMargin/x` und `/y` nicht schon gesetzt
+sind. `--router router1` bleibt möglich.
+
+Mit dem geratenen Routing-Graphen vor Stufe 2 (4 Spuren je Kanal, angenommene Matrix-Muster, 6–7 Quellen
+je CLB-Eingang) liefen im Regressionstest zwei Platzierungen in den Timeout, eine brauchte 26.500
+Iterationen. Mit dem Graphen aus den Daten (5 senkrechte Einzelsegmente, das echte Matrix-Muster, bis zu
+10 Quellen je Eingang) routen alle 42 Läufe, der längste braucht 593 Iterationen, der ganze Test 54 s
+statt 11,5 min. Mit den IOBs aus `iob.js` (Stufe 3, Pads an beiden Kanälen) braucht der längste Lauf
+80 Iterationen, mit dem Timing aus Stufe 4 117, der ganze Test knapp 90 s. Die Spalte *Routing* des
+Tests zeigt das.
 
 ## Ablauf
 
@@ -96,17 +117,19 @@ SEED=1 arch/xc2064/flow.sh                  # mit festem nextpnr-Seed (ohne SEED
 arch/xc2064/flow.sh arch/xc2064/examples/latch_sr.v   # anderes Design
 arch/xc2064/flow.sh --gui                   # mit nextpnr-GUI: Pack, Place, Route über die Werkzeugleiste
 arch/xc2064/test/run.sh                     # Regressionstest (siehe unten)
+arch/xc2064/test/bitstreams.sh              # Datenquellen und xc2064unpack mit XACT-Bitstreams prüfen
 nextpnr-himbaechel --device XC2064 --json build/flows/xc2064/blinky.pnr.json --gui   # geroutetes Ergebnis ansehen
 ```
 
 Ein schon geroutetes `*.pnr.json` lädt nextpnr in der GUI direkt. Auf der Kommandozeile braucht es
-`--no-pack`, sonst legt das Packen die Konstanten-Zellen ein zweites Mal an.
+`--no-pack`, das Ergebnis ist schon gepackt. Eine andere Geschwindigkeitsstufe wählt der Gerätename,
+etwa `--device XC2064-50` für den XC2064-PD48 (ohne Zusatz -70).
 
 | Beispiel | Inhalt | Ergebnis |
 |---|---|---|
-| `examples/blinky.v` | 16-Bit-Zähler, Pins in `blinky.pcf` (Takt an P9, alles am oberen Rand) | 20 LUT3, 7 LUT4, 16 FF, je nach Seed 5,6–6,3 MHz (Standard-Seed 5,6 MHz, `flow.sh --seed 1` oder `SEED=1 arch/xc2064/flow.sh` 6,0 MHz), Seed 4 routet nicht (siehe Routing). Ohne PCF (`PCF=/dev/null`) legt `pack()` den Takt selbst an P9, je nach Seed 5,5–6,1 MHz. Die Werte verschieben sich mit jeder Änderung am Routing-Graphen. Der kritische Pfad sind die LUT-Ebenen der Zähler-Logik, eine Carry-Kette hatte erst der XC4000 |
+| `examples/blinky.v` | 16-Bit-Zähler, Pins in `blinky.pcf` (Takt an P9, alles am oberen Rand) | 20 LUT3, 7 LUT4, 16 FF, bei -70 je nach Seed 13,9–14,3 MHz (Standard-Seed 14,1 MHz, `flow.sh --seed 1` oder `SEED=1 arch/xc2064/flow.sh` 14,0 MHz), bei -50 10,1 MHz. Ohne PCF (`PCF=/dev/null`) legt `pack()` den Takt selbst an P9, je nach Seed 13,7–14,4 MHz. Die Werte verschieben sich mit jeder Änderung an Routing-Graph und Timing. Der kritische Pfad sind die LUT-Ebenen der Zähler-Logik, eine Carry-Kette hatte erst der XC4000 |
 | `examples/latch_sr.v` | FF mit fallender Flanke, FF mit asynchronem Set/Reset, Latch, Pins in `latch_sr.pcf` | 3 Speicherelemente mit `CLKINV`, `S`/`R` bzw. `LATCH`. Ohne PCF kommt `clk` an P9 und das Latch-Enable `en` an P43 |
-| `examples/tristate.v` | 4-Bit-Bus (`inout`) mit Low-aktivem `oe_n`, Tristate-Ausgang `tout` mit `en_n`, Pins in `tristate.pcf` (alles am oberen Rand) | 4 `XC2000_IOBUF`, 1 `XC2000_TOBUF`, 7 LUT3, 1 LUT4, 8 FF, 19–22 MHz, Seed 3 mit PCF routet nicht. T aller Bus-Bits hängt ohne Logik am Pad von `oe_n` und läuft über die Long Line des oberen Randkanals. Mit High-aktivem Enable (Inverter in einer CLB, deren Ausgänge die waagerechten Long Lines nicht erreichen, also nur über die Spuren zu den T) war der Bus dort nicht routbar |
+| `examples/tristate.v` | 4-Bit-Bus (`inout`) mit Low-aktivem `oe_n`, Tristate-Ausgang `tout` mit `en_n`, Pins in `tristate.pcf` (alles am oberen Rand) | 4 `XC2000_IOBUF`, 1 `XC2000_TOBUF`, 7 LUT3, 1 LUT4, 8 FF, bei -70 je nach Seed 54–57 MHz (-50: 39, -100: 71, -130: 88 MHz). T aller Bus-Bits hängt ohne Logik am Pad von `oe_n` und läuft über eine Long Line des oberen Randkanals (die T-Quellen dort: 2 Einzelsegmente und 2 Long Lines). Mit High-aktivem Enable (Inverter in einer CLB, deren Ausgänge die waagerechten Long Lines nicht erreichen, also nur über die Spuren zu den T) war der Bus dort nicht routbar |
 
 In VS Code laufen die allgemeinen Tasks *Arch: Flow ausführen* und *Arch: Flow mit nextpnr-GUI* sowie
 die Debug-Konfigurationen für Architekturen (Run and Debug). Als Namen jeweils `xc2064` eingeben.
@@ -127,7 +150,8 @@ mit dem nextpnr-Standard-Seed und den Seeds 1–6, mit und ohne PCF, und prüft 
 Der Vergleich läuft in yosys: `equiv_make` paart die gleichnamigen Signale (Ports und Register),
 `clk2fflogic` bildet die Takte mit ihrer Flanke nach (`CLKINV` zählt also mit), und `equiv_induct`
 beweist die Gleichheit für alle Eingangsfolgen. Als Modelle dienen `yosys/cells_sim.v` und für die
-Konstanten-Zellen, die erst nextpnr anlegt, `test/pnr_cells.v`. Ein verändertes INIT-Bit, vertauschte
+Konstanten-Zellen, die nextpnr bis Stufe 3 anlegte, `test/pnr_cells.v` (seit Stufe 4 sind Konstanten
+gewöhnliche LUTs). Ein verändertes INIT-Bit, vertauschte
 LUT-Eingänge, ein umgedrehtes `CLKINV`, ein FF statt Latch, ein gelöster Pip oder ein LUT-Eingang an
 der falschen Quelle fallen jeweils auf.
 
@@ -139,8 +163,9 @@ Läufe auf. Jeder `inout`-Port wird ein Ausgang, und was ihn liest, liest stattd
 falschen Netz, vertauschte I oder O zweier Bus-Bits, vertauschtes T und I oder ein Tristate-Ausgang ohne
 T fallen jeweils auf.
 
-Für den Bitstream ist die Spalte *Pips* die spätere Gegenprobe: Ein Leser, der Bels und Pips aus der
-RBT-Datei zurückgewinnt, kann dieselbe Netzliste schreiben und denselben Vergleich durchlaufen.
+Für den Bitstream ist die Spalte *Pips* die spätere Gegenprobe: `xc2064unpack` (siehe Ausbaustufen)
+gewinnt Bels und Pips aus der RBT-Datei zurück, daraus entsteht dieselbe Netzliste, und sie durchläuft
+denselben Vergleich.
 
 Umgebungsvariablen: `SEEDS="1 2 3"` (zusätzlich zum Standard-Seed, leer nur dieser), `FREQ`, `FMIN`,
 `TIMEOUT`, `YOSYS`, `NEXTPNR`. Logs, Netzlisten und die Äquivalenz-Logs je Lauf liegen unter
@@ -154,19 +179,38 @@ hervorgehoben, so dass sich jeder Pfad vom Pad über Kanäle, Switch-Matrizen un
 in die LUTs und das Flipflop verfolgen lässt. Mit der Maus über einem Pip zeigt die GUI seinen Namen.
 
 Die Ausrichtung folgt Datenblatt und Die-Fotos: X0Y0 oben links. In den Kacheln X1Y1…X9Y9 sitzen oben
-links die Switch-Matrizen SM0/SM1 (die Diagonalen darin sind ihre Pips), rechts davon bzw. darunter die
-Kanäle (2 Spuren pro Matrix). Dünne Linien sind die Long Lines und die beiden Taktnetze. Am Rand
-enden die Switch-Matrizen, die Kanäle laufen dort nur parallel zum Rand weiter.
+links die Switch-Matrizen 8.1 und 8.2, rechts davon der Kanal oberhalb der CLB, darunter der Kanal links
+der CLB. Die Linien darin der Graph aus den Daten:
+
+- **Lage:** Die Leitungen liegen in der Reihenfolge und mit den Abständen aus Shirriffs `draw.js`, am Rand
+  mit den zusätzlichen Long Lines.
+- **Switch-Matrizen:** Ein Rahmen um die Pins. Jede Verbindung des Musters ist eine Linie von Pin zu Pin,
+  benutzte leuchten auf.
+- **Einzelsegmente** enden an den Rahmen der Matrizen.
+- **Fünfte senkrechte Leitung:** Ihr Stück beginnt am Kästchen des Verbindungspunkts oben im Kanal, läuft
+  ein Stück auf der Spur von local.6 und knickt dann auf die Spur von local.5. Das Stück der Zeile darüber
+  läuft daneben noch bis in den Kanal hinein.
+- **Long Lines und GCLK** laufen über die ganze Höhe bzw. Breite. GCLK kommt oben als `CLK.AA.O` vom Pad
+  P9, ACLK unten waagerecht vom Pad P43.
+- **Repowering-Puffer** sind zwei Dreiecke Spitze an Spitze auf den Einzelsegmenten an den
+  Sektionsgrenzen (vor den Kanälen der Zeilen und Spalten D und G). Sie gehören zum Segment und leuchten
+  mit ihm auf.
+- **PIP-Kästchen** sitzen an jeder Kreuzung, die ein PIP-Bit hat.
 
 Die IOBs sind wie im Datenblatt gezeichnet: außen das Pad, im Rahmen der Ausgangstreiber (Dreieck zum
 Pad) mit seinem Multiplexer und dem kleineren Multiplexer für das Tristate, daneben der Eingangstreiber
-(Dreieck nach innen). Ausgang, Tristate und Eingang laufen als drei Leitungen quer über das
-Randkanalstück, PIP-Kästchen zeigen, an welchen Spuren und Long Lines sie geschaltet werden können.
-Direktverbindungen: Am rechten Rand laufen X und Y der CLB links durch den Kanal in den
-Ausgangsmultiplexer des IOB, oben und unten läuft X senkrecht in den Ausgangsmultiplexer des zweiten IOB
-(dafür ist es gespiegelt gezeichnet). Der Eingang vom Pad läuft oben zu B, unten zu C und D, links zu B
-der Rand-CLB, auf den Wegen, die dort sonst die Direktleitungen der fehlenden Nachbar-CLB nehmen. P9
-und P43 führen ihren Eingang außerdem zum Taktpuffer von GCLK bzw. ACLK.
+(Dreieck nach innen). Ausgang, Tristate und Eingang laufen als drei Leitungen quer über den Kanal
+parallel zum Rand. Wie bei Shirriff knicken Ausgang und Eingang dahinter in eine Stichleitung parallel
+zum Rand ab, die die Leitungen des Kanals senkrecht zum Rand kreuzt; die Tiefe der Stichleitungen ist so
+gewählt, dass sich die Pins eines IOB nicht kreuzen. Welche Kreuzungen ein Kästchen bekommen, liest
+`xc2064.cc` aus den Pips der Chipdb, die Zeichnung der IOBs braucht also keine eigene Tabelle.
+Direktverbindungen: Am rechten Rand laufen X und Y der CLB links durch den Randkanal in den
+Ausgangsmultiplexer des ersten IOB; zum zweiten IOB der Kachel darunter knicken sie vor dem Randkanal
+nach unten ab. Oben und unten läuft X senkrecht in den Ausgangsmultiplexer des zweiten IOB (dafür ist es
+gespiegelt gezeichnet). Der Eingang vom Pad läuft auf seiner Stichleitung oben zu A (Abzweig auf der Spur
+von col.x zu B), unten zu D (Abzweig zu C), links zu B der Rand-CLB. An P9 und P43 kreuzt der Eingang die
+Taktleitung (`CLK.AA.O` bzw. `row.I.clk`), das Kästchen dort ist der Taktpuffer; der Ausgangsmultiplexer
+hat an derselben Leitung GCLK bzw. ACLK als Quelle.
 
 Eine CLB (grauer Rahmen) folgt dem Blockschaltbild im Datenblatt, von links nach rechts:
 
@@ -178,8 +222,8 @@ Eine CLB (grauer Rahmen) folgt dem Blockschaltbild im Datenblatt, von links nach
 | Speicherelement | D und Takt (Dreieck) links, S oben, R unten, Q rechts |
 | Ausgänge | Schienen F, FG, G, Q mit den Multiplexern X und Y, beide rechts hinaus durch den Kanal (PIP-Kästchen an ihren Spuren und Long Lines) |
 
-Wie im Datenblatt läuft A über die Logik zum Set-Multiplexer. C, das Taktsignal K von GCLK/ACLK und D
-laufen unter der Logik zu Takt und Reset. F, FG und G laufen über dem Speicherelement zu den Ausgängen,
+Wie im Datenblatt läuft A über die Logik zum Set-Multiplexer. C, das Taktsignal K (von long.2 oder
+GCLK) und D laufen unter der Logik zu Takt und Reset. F, FG und G laufen über dem Speicherelement zu den Ausgängen,
 Q läuft unten herum zurück zu den LUTs. Die Direktleitungen von X laufen am rechten Rand hinauf und
 hinab zu den Pins der CLB darüber bzw. darunter, Y läuft durch den Kanal weiter in die B-Zeile der CLB
 rechts. Keine Leitung läuft durch ein Bauteil. Im Routing zeichnet jedes Wire seine ganze Leitung bis zu
@@ -198,15 +242,156 @@ Das SVG zeichnet in fester Reihenfolge, nicht nach Zustand. Deshalb kann dort ei
 benutzte an derselben Stelle überdecken (FG nutzt die Multiplexer von F und G). Die GUI zeichnet
 Benutztes immer obenauf.
 
+## Datenquellen und Bitstream-Werkzeuge
+
+Der Weg zu einem echten Bitstream baut auf zwei Submodules auf. Im Submodule selbst ändert nichts, beide
+werden nur gelesen.
+
+| Submodule | Commit | genutzt |
+|---|---|---|
+| `shirriff-xc2064` ([shirriff/xc2064](https://github.com/shirriff/xc2064)) | `4d35c218` (25.05.2021) | `html/XC2064-def.txt` (Name jedes der 11.360 Bits), `html/draw.js` (Leitungsnamen und ihre Lage), `html/clb.js` (CLB-Eingangs-Muxe), `html/iob.js` (IOBs), `obsolete/test/TEST1.RBT` mit `TEST1.LCA` |
+| `openxc2064` ([rates37/openxc2064](https://github.com/rates37/openxc2064), MIT) | `db348a02` (03.10.2026) | `bitstream/XACT_comparisons/*.BIT` und `hardware/bitstreams/AND_OR.BIT` (mit XACT erzeugt), `possible_connections` in `bitstream/generate_bitstream.py` als Gegenprobe |
+
+Nicht verwendet werden XACTSTEP und die Gerätedaten von XACT.
+
+**Abgleich der beiden Quellen** (`python3 -m xc2064db`, siehe unten). Die Herkunft der Daten von
+openxc2064 ist dort nicht dokumentiert. Der Abgleich zeigt, dass sie zum großen Teil auf Shirriff aufbauen:
+
+| openxc2064 | Ergebnis |
+|---|---|
+| `pin_planning/XC2064-def.txt` | Kopie von Shirriffs Datei, also keine unabhängige Bestätigung |
+| `bitstream/XC2064-spreadsheet.csv` | dieselbe Bitkarte als Tabelle 71 × 160 (`spreadsheet_maker.py`) |
+| `possible_connections` | stimmt mit dem Muster der Switch-Matrizen aus Shirriffs Magic-Bits überein (Pins 0–7 dort = 1–8 bei Shirriff) |
+| `src/openxc2064/device/data/xc2064_8x8.json` | Schaltplan des Simulators mit Bildschirmkoordinaten, ohne Bezug zu Bits oder Shirriffs Namen; nicht verwendet |
+| XACT-Bitstreams | unabhängig: Mit Xilinx' Software erzeugt. Alle passen zu Shirriffs Bitkarte (kein programmiertes Bit an einer unbenutzten Stelle, jeder CLB-Mux-Code in `clb.js` bekannt) |
+| `hardware/bitstreams/LUT_TEST.BIT` | anderes Format (5010 Bytes, anderer Kopf), noch nicht gelesen; COUNTER, LUT2 und PIN_FIND dort gleichen denen unter `XACT_comparisons` |
+
+Abweichungen zwischen den Quellen gibt es bisher keine. Zu Shirriffs Datei: Sie endet bei Bit 11.357, die
+Bits 11.358 und 11.359 gelten wie in seinem Viewer als unbenutzt.
+
+**`xc2064db`** (Python-Paket in `arch/xc2064`) liest die Quellen. Es ist die gemeinsame Grundlage für den
+Generator der Chipdb (Namen und Verbindungen) und die Bitstream-Werkzeuge (Bitkarte):
+
+| Modul | Inhalt |
+|---|---|
+| `bitmap` | Art und Felder jedes Bits aus `XC2064-def.txt` |
+| `lines` | Leitungsnamen (`col.B.local.1`, `row.C.long.1` …) und ihre G-Koordinaten. Die Ränder liest es als Text aus `draw.js`, die Spalten und Zeilen B–H rechnet es wie dort `initNames()` aus. Ein PIP-Eintrag wie `170G23` ist die Kreuzung zweier Leitungen |
+| `switches` | 154 Switch-Matrizen (2 je Kreuzung, keine an den Ecken), Pins 1–8, Verbindungen aus den Magic-Bits |
+| `clbmux` | CLB-Eingänge A–D und K: Quellen und Mux-Codes, wie `generateClbPips()` in `clb.js` |
+| `bitstream` | `.BIT` und `.RBT` lesen |
+| `config` | Textformat der Konfiguration |
+| `graph` | Routing-Graph: Segmente aus den Trennstellen an den Matrizen und dem Modell der fünften Leitung, Verbindungen aus PIP-, Magic- und Mux-Bits. Der Generator `nextpnr/xc2064_arch_gen.py` baut daraus die Kacheln, `xc2064unpack` prüft daran die Bitstreams |
+| `lca` | `TEST1.LCA` von XACT lesen und gegen Dekodierung und Graph prüfen |
+
+Was die Daten über das Original sagen:
+- **Switch-Matrizen:** Die 98 inneren haben dasselbe Muster mit 20 Verbindungen, jeder Pin mit 5 der 7
+  anderen. Die 56 am Rand haben dasselbe Muster ohne die Pins der fehlenden Seite.
+- **CLB-Eingänge:** A hat 6–7 Quellen, B 10, C 8, D 6–7 und K 2.
+- **IOBs:** Ausgang zum Pad aus 6–9 Quellen, T aus 4 (2 Einzelsegmente und 2 Long Lines des Kanals
+  parallel zum Rand), Eingang auf 5–7 Leitungen. Die Leitungen eines Pins an den Kreuzungen
+  (`io1`–`io6`, `x`, `clbl`/`clbr`/`clbw`, die Randleitungen local.0 und local.5) sind Teil des IOB und
+  keine eigenen Routing-Leitungen. Der Code des T-Multiplexers trägt auch den Modus: Tristate (eine
+  Quelle gewählt), Treiber immer an oder immer aus.
+- **Repowering-Puffer:** Die 158 Bidi-Bits, die auch Shirriff nicht dekodiert, tragen als Namen eine
+  G-Lage, und die liegt immer auf genau einem Einzelsegment: 86 senkrecht (alle local.1–5 jeder Spalte
+  bei G 109 und 52, also kurz vor den Kanälen der Zeilen D und G), 72 waagerecht (bei G 65 und 125, vor
+  den Spalten D und G). Das sind die bidirektionalen Puffer an den Grenzen der 9 Sektionen aus dem
+  Datenblatt. Ihre Richtung zeigen die XACT-Bitstreams: Bei jedem der 18 Puffer, über die ein Netz von
+  seinem Treiber zu einer Senke läuft, ist das Bit 0, wenn das Signal nach unten bzw. rechts läuft, und
+  1, wenn es nach oben bzw. links läuft. Puffer auf unbenutzten Segmenten setzt XACT mal so, mal so.
+- **Abdeckung:** Von 8596 benutzten Bits dekodiert das Paket 6132 (Pips, Switch-Matrizen,
+  CLB-Eingänge, Ausgangs- und T-Multiplexer der IOBs, Richtung der Puffer). 2450 sind benannt und werden
+  in den nächsten Stufen zu Bel-Optionen (LUT, FF, X/Y, IOB-Latch und -Takt, Other). Offen sind die 14
+  Bits der Taktpuffer-Eingänge `CLK.AA.I` und `CLK.II.I`: Kein Bitstream benutzt sie, ihre Codes lassen
+  sich erst mit einem echten Chip bestimmen (etwa ein Zähler an GCLK, Code für Code geladen).
+- **Routing-Graph:** Er enthält alle 2520 Magic-Bits und alle 1656 PIP-Bits: 806 PIPs zwischen
+  allgemeinen Leitungen, 448 Ausgangs-PIPs von X und Y, 353 Eingangs-PIPs der IOBs und 49
+  Verbindungspunkte der fünften Leitung. Dazu die 2064 Mux-Quellen der CLB-Eingänge und 642 der
+  IOB-Multiplexer (410 Ausgang, 232 T) und die beiden Taktpuffer-Eingänge von P9 und P43 (Code
+  unbekannt). Nicht im Graphen sind 9 Einträge aus `iob.js`: 8 Kreuzungen mit `col.A.io2`, für die die
+  Bitkarte kein PIP-Bit hat, und `@aclk_in` an P43, das Shirriff selbst nicht auflöst.
+- **Gegenprobe mit XACT:** Alle 210 Routing-Elemente, die XACT in `TEST1.LCA` nennt, stehen in der
+  Dekodierung von `TEST1.RBT`. 2 davon sind Takte gelatchter IOBs (nicht dekodiert), 29 sind T-Eingänge
+  von Pads, deren Treiber laut T-Code immer an bzw. aus ist (XACT routet T trotzdem, der Multiplexer
+  wählt es nicht). Der Graph verbindet die CLB- und IOB-Pins der Netze BC, bc2, BD, bd2, K, p1, P3, P9 und
+  q1 genau wie XACT und hält alle Netze getrennt. CB und DB hat XACT selbst nicht geroutet.
+  `xc2064unpack` findet alle 127 programmierten Pips und Switch-Verbindungen von `TEST1.RBT` im Graphen.
+  Die Matrizen der Zeile I benennt das Paket wie XACT (Shirriffs Switch-Klasse vertauscht dort 8.1 und
+  8.2).
+
+**Bitstream-Format** (`.BIT` und `.RBT` von XACT): Auf einen 40-Bit-Kopf folgen 160 Rahmen aus Startbit
+`0`, 71 Datenbits und `111`. Bit i der Bitkarte steht in Rahmen i // 71 an Stelle i % 71. Ein
+programmiertes Bit ist 0. Die RBT-Datei hat davor 7 Textzeilen, etwa `Xilinx LCA TEST1.LCA 2064LPC68`
+und `Produced by XACT version 5.1.0`. Sie schreibt den Kopf und jeden Rahmen als eine Zeile, am Ende
+steht `11111111`.
+
+**Textformat** (zwischen nextpnr und `xc2064pack`, Rückweg `xc2064unpack`), eine Zeile je Eintrag:
+
+```
+device XC2064
+mux AB.A row.A.local.1                     # CLB-Eingang und gewählte Quellleitung (oder none)
+mux P59.O AH.X                             # Ausgangs-Mux eines IOB: Leitung, X/Y einer CLB, GCLK oder ACLK
+mux P59.T col.I.long.2                     # T-Mux eines IOB: Quelle (Tristate), on (Treiber an) oder off
+pip col.B.local.5:row.B.local.3            # PIP: Kreuzung zweier Leitungen
+switch AB.8.1 3-8                          # Verbindung zweier Pins einer Switch-Matrix
+bidi 125G6 right                           # Repowering-Puffer: down/right (Bit 0), sonst up/left
+bit CLB AB Logic Table: 2 Bit: 0           # jedes andere programmierte Bit mit seinem Namen
+```
+
+Die Datei ist verlustfrei, jedes programmierte Bit ergibt sich aus ihr. Die `bit`-Zeilen werden in den
+nächsten Stufen zu Bel-Optionen wie LUT-Inhalt oder IOB-Modus.
+
+```bash
+python3 arch/xc2064/tools/xc2064unpack TEST1.RBT -o TEST1.txt   # Bitstream -> Text (bricht bei unbekannten Bits ab)
+cd arch/xc2064 && python3 -m xc2064db                            # Abdeckung und Gegenproben der Datenquellen
+arch/xc2064/test/bitstreams.sh                                   # beides für alle XACT-Bitstreams und TEST1.RBT
+```
+
 ## Ausbaustufen
 
 - **Mux-Modus FGM** (B wählt zwischen zwei unabhängigen 3-Variablen-Funktionen) als eigener Bel-Modus.
-- **CLB-Eingänge A–D** mit allen Quellen des Originals (laut `clb.js` 6–10 je Eingang).
 - **Gelatchte IOB-Eingänge** mit den vier IOB-Taktmultiplexern (`iob.js`).
-- **Zweites IOB am rechten Rand** mit X und Y der CLB links (`iob.js`, `rightlower`).
 - **Echter Bitstream**: [`XC2064-def.txt`](https://github.com/shirriff/xc2064) beschreibt alle 11.360
-  Konfigurationsbits (LUT-Inhalte, IOB-Optionen, PIPs). Für ladbare Bitstreams müssten die PIPs des
-  Modells genau den PIPs des Originals entsprechen. Dafür muss man den Routing-Graphen aus diesen Daten
-  und der Die-Geometrie rekonstruieren. Danach kann ein `--post-route`-Python-Skript oder eine
-  C++-Funktion in `xc2064.cc` die RBT-Datei schreiben.
+  Konfigurationsbits (LUT-Inhalte, IOB-Optionen, PIPs, Switch-Matrizen). Für ladbare Bitstreams müssen
+  die PIPs des Modells genau den PIPs des Originals entsprechen. Dafür entsteht der Routing-Graph aus
+  diesen Daten, mit Shirriffs Leitungsnamen. Der Bitstream entsteht dann wie bei iCE40, ECP5 und
+  GateMate in zwei Schritten:
+  1. nextpnr schreibt mit `--vopt out=<Datei>` eine lesbare Textdatei: die benutzten Pips und die
+     Konfiguration jedes Bels (LUT-Inhalte, Muxe, IOB-Modus), möglichst mit Shirriffs Namen.
+  2. Ein eigenes Tool in `arch/xc2064` (`xc2064pack`, Python) macht daraus die RBT- bzw. BIT-Datei,
+     `xc2064unpack` den Rückweg. Die Tabelle Pip bzw. Bel-Option → Bit(muster) gehört ins Pack-Tool,
+     nicht in nextpnr.
+
+  So bleibt die Datei zwischen den Schritten lesbar und vergleichbar, und `xc2064unpack` kann echte
+  Bitstreams wie Shirriffs `TEST1.RBT` (mit `TEST1.LCA`) zurück in Pips und Bel-Konfiguration übersetzen.
+  `xc2064pack` schreibt RBT genau im Format von XACT. Das Ziel ist, dass der STM32-Lader aus
+  [dhr0000001/XC2064-in-2026](https://github.com/dhr0000001/XC2064-in-2026) die Dateien in einen echten
+  XC2064-PD48 laden kann (Erfolg: D/P-Pin High). Dafür kommt das Gehäuse PD48 (Pinbelegung aus dem
+  Datenblatt) als Option neben PLCC68.
+
+  Stufen:
+  1. erledigt: Datenpaket `xc2064db`, `xc2064unpack` auf Bitebene, Test mit den XACT-Bitstreams (siehe
+     [Datenquellen](#datenquellen-und-bitstream-werkzeuge))
+  2. erledigt: CLB-Feld aus den Daten (`xc2064db.graph`): Kanäle (senkrecht 5 Einzelsegmente, waagerecht 4),
+     Switch-Matrizen mit dem echten Muster, Long Lines, alle PIP-Kreuzungen, CLB-Eingänge mit allen Quellen
+     und Mux-Codes, X/Y über ihre PIP-Bits; Gegenprobe mit `TEST1.LCA`. `xc2064unpack` zählt, welche
+     dekodierten Pips der Graph kennt (`TEST1.RBT`: 124 von 127, die übrigen an IOBs). Die Router-Timeouts
+     sind damit verschwunden
+  3. erledigt: IOBs aus `iob.js` (`xc2064db.iobmux`): Ausgangs- und T-Multiplexer mit Mux-Codes,
+     Eingang über PIP-Bits, an beiden Kanälen am Pad, T aus 2 lokalen Leitungen und 2 Long Lines,
+     an/aus/Tristate als Konfiguration (konstantes T faltet `pack()`), beide IOBs rechts mit X/Y. Alle
+     PIP-Bits liegen jetzt im Graphen, ebenso alle 127 Pips und Switch-Verbindungen von `TEST1.RBT`; die
+     GUI zeichnet die IOB-Pins aus den Pips. Der längste Lauf im Regressionstest braucht 80
+     Router-Iterationen
+  4. erledigt: Repowering-Puffer aus den Bidi-Bits (Richtung mit den XACT-Bitstreams belegt, im Routing
+     abgeleitet), Taktpuffer als Pips mit den Bits ihrer Eingangs-Muxe (Code offen, Takt an P9/P43 nur
+     über den Puffer), Konstanten ohne erfundene Pips (in LUT-Inhalte gefaltet oder Konstanten-LUT),
+     Timing von CLB und IOB aus dem Data Book 1994 (-70/-100/-130), Interconnect als RC-Modell. Offen:
+     die Codes von `CLK.AA.I`/`CLK.II.I` (Versuch am echten Chip), die echten -50-Werte (älteres Data
+     Book) und Zahlen für das Interconnect
+  5. `--vopt out=`, `xc2064pack` im RBT-Format von XACT, Rundlauf im Regressionstest (Text → RBT → zurück
+     → Netzliste → formaler Vergleich), formaler Vergleich der XACT-Bitstreams, Gehäuse PD48
+
+  Nach jeder Stufe muss `test/run.sh` für alle Beispiele bestehen (Netz und Pips). Die GUI behält CLB und
+  IOBs im Datenblatt-Stil, nur die Kanäle folgen der Lage der Leitungen bei Shirriff.
   Weitere Vorarbeit: [JohnDMcMaster/project2064](https://github.com/JohnDMcMaster/project2064).
