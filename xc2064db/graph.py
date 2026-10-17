@@ -23,12 +23,16 @@ Segmente (Datenblatt "General-Purpose Interconnect", Bild 7b; Lage aus den G-Koo
   - IOBs (iob.js): Knoten "Pnn.O" (Ausgangs-Mux zum Pad), "Pnn.T" (Tristate-Mux) und "Pnn.I" (Eingang vom
     Pad). Die Pin-Leitungen an den Kreuzungen (io1-io6, x, clbl/clbr/clbw, local.0 und local.5 am Rand)
     gehören zum IOB und sind keine eigenen Knoten.
+  - Takt der gelatchten IOB-Eingänge: je Chipseite ein Knoten "IOCLK.T/R/B/L" (oben row.A.local.0, rechts
+    col.I.local.5, unten row.I.local.5, links col.A.local.0), getrieben vom K-Mux der Seite; der Takteingang
+    "Pnn.K" jedes IOB hängt fest an der Leitung seiner Seite.
 
 Verbindungsarten (Conn.kind): pip (PIP-Bit, zwischen allgemeinen Leitungen in beide Richtungen),
 out (PIP-Bit von X/Y auf eine Leitung), switch (Magic-Bit), junction (Verbindungspunkt der fünften
 Leitung), mux (CLB-Eingang: Quelle -> Pin, bits = Mux-Bits, code), iobo/iobt (Ausgangs- bzw. T-Mux eines
 IOB: Quelle -> Pnn.O/T, mit code; Treiber aus/an sind Codes ohne Quelle), iobi (PIP-Bit: Pnn.I ->
-Leitung), clkbuf (Eingang eines Taktpuffers, Code unbekannt), bidi (Repowering-Puffer, nur im Prüfmodus
+Leitung), iobk (K-Mux: Quelle -> IOCLK.<Seite>, mit code), iobkin (fest: IOCLK.<Seite> -> Pnn.K, ohne Bit),
+clkbuf (Eingang eines Taktpuffers, Code unbekannt), bidi (Repowering-Puffer, nur im Prüfmodus
 split_bidi). Die Einträge aus iob.js ohne PIP-Bit stehen in Graph.unmodelled. Konstanten gibt es im
 Original nicht als Leitung (nextpnr: pack() faltet sie in LUT-Inhalte).
 """
@@ -42,7 +46,7 @@ from .lines import Lines
 LETTERS = "ABCDEFGHI"
 Conn = collections.namedtuple("Conn", "kind a b bits code name")
 Buffer = collections.namedtuple("Buffer", "name line g bit seg")
-CODED = ("mux", "iobo", "iobt", "clkbuf", "bidi")  # Verbindungen über einen Code statt eines PIP-Bits
+CODED = ("mux", "iobo", "iobt", "iobk", "clkbuf", "bidi")  # Verbindungen über einen Code statt eines PIP-Bits
 
 
 def conn_on(cn, raw):
@@ -81,6 +85,7 @@ class Graph:
         self._pips()
         self._switches()
         self._iobs()
+        self._iob_clocks()
         self._muxes()
         self._clkbufs()
         used = {b for cn in self.conns for b in cn.bits}
@@ -310,13 +315,40 @@ class Graph:
                 self.conns.append(Conn("iobi", "%s.I" % pin, self.route_node(ent), [bit], None,
                                        "%s:%s" % (ent.col, ent.row)))
 
+    def _iob_clocks(self):
+        """Takte der gelatchten Eingänge: K-Muxe (iobmux.kmuxes) auf die Taktleitung ihrer Seite, jedes IOB fest
+        an der Leitung seiner Seite. Quellen, die keine Routing-Leitung sind (Stichleitungen), in unmodelled."""
+        self.kmuxes = iobmux.kmuxes(self.lines, self.entries)
+        self.latch_bit = {}  # Pin -> Bit "I PAD/Latched" (programmiert: direkt, sonst gelatcht)
+        for e in self.entries:
+            m = re.fullmatch(r"IOB (P\d+)\.I PAD/Latched", e.text)
+            if m:
+                self.latch_bit[m[1]] = e.index
+        for pin, km in sorted(self.kmuxes.items()):
+            bits = [km.bits[n] for n in sorted(km.bits)]
+            for code, k in sorted(km.codes.items()):
+                ent = km.sources[k]
+                src = self.iob_source(ent)
+                if src is None:
+                    self.unmodelled.append((pin, ent.spec, "Quelle des K-Mux"))
+                    continue
+                self.conns.append(Conn("iobk", src, "IOCLK." + km.side, bits, code,
+                                       "%s.K %s" % (pin, iobmux.source_name(ent))))
+        for pin, iob in sorted(self.iobs.items()):
+            self.conns.append(Conn("iobkin", "IOCLK." + iob.style[0].upper(), pin + ".K", [], None, pin + ".K"))
+
+    def latched(self, pin, raw):
+        """Ist der Eingang des IOB im Bitstream raw gelatcht (I:Q)?"""
+        return raw[self.latch_bit[pin]] == 1
+
     def cfg(self, cn):
-        """Zeile im Textformat (config.py), die diese Verbindung programmiert; None für die Puffer (bidi)"""
+        """Zeile im Textformat (config.py), die diese Verbindung programmiert; None für die Puffer (bidi) und
+        feste Verbindungen (iobkin)"""
         if cn.kind in ("pip", "out", "junction", "iobi"):
             return "pip " + self.lines.pip_name(self.entries[cn.bits[0]].key[0])
         if cn.kind == "switch":
             return "switch " + cn.name
-        if cn.kind in ("mux", "iobo", "iobt", "clkbuf"):
+        if cn.kind in ("mux", "iobo", "iobt", "iobk", "clkbuf"):
             return "mux " + cn.name
         return None
 
@@ -427,6 +459,8 @@ class Graph:
             return re.fullmatch(r"[A-H][A-H]\.[XY]|P\d+\.I", n)
 
         def is_sink(n):
+            if re.fullmatch(r"P\d+\.K", n):  # Takt eines IOB: nur, wenn sein Eingang gelatcht ist
+                return self.latched(n[:-2], raw)
             return re.fullmatch(r"[A-H][A-H]\.[ABCDK]|P\d+\.[OT]", n)
 
         out = []

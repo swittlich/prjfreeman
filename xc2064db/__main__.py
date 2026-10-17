@@ -90,11 +90,13 @@ def main():
     raw = bitstream.read(sources.TEST1_RBT).raw
     db = config.Database()
     items, problems = config.decode(db, raw)
-    missing, count = lca.check_elements(nets, items, db)
+    missing, count, kmux = lca.check_elements(nets, items, db)
     n = sum(count.values())
-    check(not missing, "alle %d Routing-Elemente von XACT stehen in der Dekodierung (davon %d Takt gelatchter "
-          "IOBs, nicht dekodiert; %d T-Eingänge mit Puffer aus/an) %s"
-          % (n, count["iob-k"], count["mux-mode"], dict(missing) if missing else ""))
+    decoded_k = ["%s %s" % (it.name, it.value) for it in items if it.kind == "mux" and it.name == "P9.K"]
+    check(not missing, "alle %d Routing-Elemente von XACT stehen in der Dekodierung (davon %d am Takt gelatchter "
+          "IOBs, nicht geprüft: XACT nennt %s, dekodiert %s; %d T-Eingänge mit Puffer aus/an) %s"
+          % (n, count["iob-k"], " und ".join(kmux), decoded_k[0], count["mux-mode"],
+             dict(missing) if missing else ""))
     skip = {it.name for it in items if it.kind == "mux" and it.name.endswith(".T") and it.value in ("off", "on")}
     res = lca.check_nets(nets, g, raw, skip)
     ok = [r[0] for r in res if r[2] == "ok" and len(r[1]) > 1]

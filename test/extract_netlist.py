@@ -23,7 +23,8 @@ ports_of = {name: {k: p for k, p in c.ports} for name, c in cells.items()}
 cell_at = {c.bel: c for c in cells.values() if c.bel}
 is_out = lambda p: str(p.type).endswith("PORT_OUT")
 # IO-Puffer: Richtung des Top-Level-Ports an PAD. PAD hängt am Pin, nicht am Routing.
-IO_DIR = {"XC2000_INBUF": "input", "XC2000_OUTBUF": "output", "XC2000_TOBUF": "output", "XC2000_IOBUF": "inout"}
+IO_DIR = {"XC2000_INBUF": "input", "XC2000_INFF": "input", "XC2000_OUTBUF": "output", "XC2000_TOBUF": "output",
+          "XC2000_IOBUF": "inout"}
 is_pad = lambda c, port: port == "PAD" and c.type in IO_DIR
 
 

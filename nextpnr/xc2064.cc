@@ -137,6 +137,7 @@ struct Xc2064Impl : HimbaechelAPI
                 pad_bels[IdString(pad->package_pin)] = bel;
                 bonded.insert(bel);
             }
+            side_iobs[side_index(io_side(ctx->getBelLocation(bel)))].push_back(bel);
             IdString name = ctx->getBelName(bel)[1];
             if (name == ctx->id("P9"))
                 clock_pads[0] = bel;
@@ -150,10 +151,10 @@ struct Xc2064Impl : HimbaechelAPI
     // zuverlässiger als router1 (wie bei gatemate/xilinx). "--router router1" bleibt möglich.
     std::string getDefaultRouter() const override { return "router2"; }
 
-    // IO-Puffer (alle auf einem IOB): Eingang, Ausgang, Tristate-Ausgang, bidirektional
+    // IO-Puffer (alle auf einem IOB): Eingang, gelatchter Eingang, Ausgang, Tristate-Ausgang, bidirektional
     static bool is_io_buffer(IdString type)
     {
-        return type.in(id_XC2000_INBUF, id_XC2000_OUTBUF, id_XC2000_TOBUF, id_XC2000_IOBUF);
+        return type.in(id_XC2000_INBUF, id_XC2000_INFF, id_XC2000_OUTBUF, id_XC2000_TOBUF, id_XC2000_IOBUF);
     }
 
     // IO-Puffer, dessen PAD am Top-Level-Port (Zelle $nextpnr_*buf) hängt
@@ -461,6 +462,7 @@ struct Xc2064Impl : HimbaechelAPI
         // IO-Puffer setzt die Synthese (synth_xc2064) ein
         const pool<CellTypePort> top_ports{
                 CellTypePort(id_XC2000_INBUF, id_PAD),
+                CellTypePort(id_XC2000_INFF, id_PAD),
                 CellTypePort(id_XC2000_OUTBUF, id_PAD),
                 CellTypePort(id_XC2000_TOBUF, id_PAD),
                 CellTypePort(id_XC2000_IOBUF, id_PAD),
@@ -469,6 +471,7 @@ struct Xc2064Impl : HimbaechelAPI
         fold_constant_tristate();
         fold_constants();
         bind_constrained_pads();
+        check_iob_clocks();
         if (clkbuf_enabled())
             bind_clock_pads();
         int moved = route_q_feedback_to_i2();
@@ -510,6 +513,8 @@ struct Xc2064Impl : HimbaechelAPI
 
     bool isBelLocationValid(BelId bel, bool explain_invalid) const override
     {
+        if (ctx->getBelType(bel) == id_IOB)
+            return iob_clock_valid(bel, explain_invalid);
         if (!ctx->getBelType(bel).in(id_LUT3, id_LUT4, id_FGM, id_DFF))
             return true;
         Loc l = ctx->getBelLocation(bel);
@@ -529,6 +534,7 @@ struct Xc2064Impl : HimbaechelAPI
         case id_XC2000_DFF.index:
             return id_DFF;
         case id_XC2000_INBUF.index:
+        case id_XC2000_INFF.index:
         case id_XC2000_OUTBUF.index:
         case id_XC2000_TOBUF.index:
         case id_XC2000_IOBUF.index:
@@ -550,6 +556,48 @@ struct Xc2064Impl : HimbaechelAPI
     HimbaechelHelpers h;
     dict<IdString, BelId> pad_bels;  // Pin des Gehäuses -> IOB-Bel
     pool<BelId> bonded;              // IOB-Bels mit Pin im Gehäuse
+    std::array<std::vector<BelId>, 4> side_iobs; // IOB-Bels je Seite (oben, rechts, unten, links)
+    static int side_index(char side) { return side == 'T' ? 0 : side == 'R' ? 1 : side == 'B' ? 2 : 3; }
+
+    // Gelatchte Eingänge (XC2000_INFF): alle IOBs einer Seite hängen an derselben Taktleitung, ihr K muss also
+    // dasselbe Netz sein
+    bool iob_clock_valid(BelId bel, bool explain) const
+    {
+        const CellInfo *ci = ctx->getBoundBelCell(bel);
+        if (!ci || ci->type != id_XC2000_INFF)
+            return true;
+        const NetInfo *k = ci->getPort(id_K);
+        char side = io_side(ctx->getBelLocation(bel));
+        for (BelId other : side_iobs[side_index(side)]) {
+            const CellInfo *oc = ctx->getBoundBelCell(other);
+            if (other == bel || !oc || oc->type != id_XC2000_INFF || oc->getPort(id_K) == k)
+                continue;
+            if (explain)
+                log_info("%s und %s: gelatchte Eingänge einer Seite (%c) mit verschiedenen Takten %s und %s\n",
+                         ctx->nameOf(ci->getPort(id_PAD)), ctx->nameOf(oc->getPort(id_PAD)), side, ctx->nameOf(k),
+                         ctx->nameOf(oc->getPort(id_K)));
+            return false;
+        }
+        return true;
+    }
+
+    // Nach dem Festlegen der Pins: gelatchte Eingänge mit verschiedenen Takten an einer Seite sind ein Fehler
+    void check_iob_clocks()
+    {
+        int n = 0;
+        for (auto &cell : ctx->cells) {
+            const CellInfo *ci = cell.second.get();
+            if (ci->type != id_XC2000_INFF)
+                continue;
+            n++;
+            if (ci->bel != BelId() && !iob_clock_valid(ci->bel, true))
+                log_error("Eingang '%s' an %s: an einer Seite hängen alle gelatchten Eingänge am selben Takt (PCF "
+                          "ändern oder die FF in den CLBs lassen: synth_xc2064 -noiobff)\n",
+                          ctx->nameOf(ci->getPort(id_PAD)), ctx->getBelName(ci->bel)[1].c_str(ctx));
+        }
+        if (n)
+            log_info("%d registered inputs in IOBs (XC2000_INFF).\n", n);
+    }
     std::string package = "PC68";
     std::array<BelId, 2> clock_pads; // P9 (GCLK), P43 (ACLK)
     bool clkbuf = false;             // --vopt clkbuf: Taktpuffer benutzen
@@ -953,13 +1001,17 @@ struct Xc2064Impl : HimbaechelAPI
                 continue;
             std::string pin = ctx->getBelName(bel)[1].str(ctx);
             const NetInfo *pad = ci->getPort(id_PAD);
-            const char *dir = ci->type == id_XC2000_INBUF    ? "input"
-                              : ci->type == id_XC2000_IOBUF ? "inout"
-                                                            : "output";
+            bool input = ci->type.in(id_XC2000_INBUF, id_XC2000_INFF);
+            const char *dir = input ? "input" : ci->type == id_XC2000_IOBUF ? "inout" : "output";
             if (pad)
                 lines.push_back(stringf("port %s %s %s", pin.c_str(), pad->name.c_str(ctx), dir));
-            lines.push_back("iob " + pin + " I:PAD");
-            if (ci->type == id_XC2000_INBUF)
+            // gelatchter Eingang: das FF im IOB, Takt über den K-Mux der Seite (Pip des Routings); Name des
+            // Registers für den Rückweg (xc2064netlist)
+            lines.push_back("iob " + pin + (ci->type == id_XC2000_INFF ? " I:Q" : " I:PAD"));
+            const NetInfo *q = ci->type == id_XC2000_INFF ? ci->getPort(id_O) : nullptr;
+            if (q)
+                lines.push_back(stringf("reg %s %s", pin.c_str(), q->name.c_str(ctx)));
+            if (input)
                 lines.push_back("mux " + pin + ".T off");
             else if (ci->type == id_XC2000_OUTBUF)
                 lines.push_back("mux " + pin + ".T on");
@@ -1465,6 +1517,20 @@ struct Xc2064Impl : HimbaechelAPI
     // dem Kanal (oben/unten/rechts ist dort weniger Platz als bei Shirriff)
     static constexpr float STUB_STEP = 0.011;
     static constexpr float L_STUB[4] = {0.234, 0.270, 0.294, 0.318};
+    // Eingang wie im Datenblatt (Bild 3): hinter dem Eingangstreiber direkt (links) bzw. über das FF (rechts)
+    // in den Eingangsmultiplexer, dessen Ausgang die Leitung des Eingangs (Bel-Pin O) ist; der Takt K des FF
+    // kommt außen neben dem IOB von der Taktleitung der Seite
+    static constexpr float IN_J_D = 0.36, IN_D_R = 0.214, IN_Q_R = 0.243;          // Abzweig, Wege
+    static constexpr float FF_R0 = 0.224, FF_R1 = 0.262, FF_D0 = 0.385, FF_D1 = 0.455, FF_K_D = 0.43; // FF
+    static constexpr float IM_R0 = 0.206, IM_R1 = 0.252, IM_D1 = 0.49, IM_D0 = 0.53; // Eingangsmultiplexer
+    static constexpr float K_R = 0.278;                                             // K außen neben dem IOB
+    // Taktleitung je Seite ganz außen (CLK_EDGE_D vom Chiprand). Der K-Mux der Seite sitzt an einer Ecke:
+    // oben und rechts in der Kachel AI (oben auf der Spur von col.I.local.0 links der Spalte I, rechts auf
+    // row.A.local.5 unter dem Kanal der Zeile A), unten und links in IA (unten col.A.local.5, links
+    // row.I.local.0 unter dem Kanal der Zeile I); seine Quellen kreuzen die Stichleitung mit Kästchen.
+    static constexpr float CLK_EDGE_D = 0.012;
+    static constexpr float KT_X = 0.022, KT_Y1 = 0.307, KR_Y = 0.362, KR_X0 = 0.064;
+    static constexpr float KB_X = 0.234, KB_Y0 = 0.034, KL_Y = 0.345, KL_X1 = 0.216;
 
     struct Iob
     {
@@ -1689,8 +1755,8 @@ struct Xc2064Impl : HimbaechelAPI
             iob_mux(g, style, loc, b, TM_R0, TM_R1, MX_D0, TM_D1);
             iob_line(g, style, loc, b, {{T_R, de}, {T_R, TM_D1}});
             iob_line(g, style, loc, b, {{T_R, MX_D0}, {T_R, EN_D}, {OB_R + 0.015, EN_D}});
-        } else { // Eingang vom Pad: Eingangstreiber -> über den Kanal
-            iob_line(g, style, loc, b, {{I_R, IB_TIP}, {I_R, de}});
+        } else { // Eingang vom Pad: Eingangsmultiplexer -> über den Kanal
+            iob_line(g, style, loc, b, {{I_R, IM_D0}, {I_R, de}});
         }
         if (!stub)
             return;
@@ -1705,6 +1771,69 @@ struct Xc2064Impl : HimbaechelAPI
         if (branch >= 0) {
             tee(branch);
             poly(g, style, loc, {edge_pt(b.side, branch, ds), edge_pt(b.side, branch, branch_d)});
+        }
+    }
+
+    // Taktleitung der gelatchten Eingänge einer Seite: in den Pad-Kacheln ein Stück außen am Rand, in der Ecke
+    // des K-Mux (AI: oben, rechts; IA: unten, links) dessen Stichleitung bis über seine Quellen
+    void draw_iob_clock(std::vector<GraphicElement> &g, GraphicElement::style_t style, Loc loc, char side) const
+    {
+        const float e = CLK_EDGE_D, f = 1 - CLK_EDGE_D;
+        bool corner_tr = loc.x == LAST && loc.y == 1, corner_bl = loc.x == 1 && loc.y == LAST;
+        switch (side) {
+        case 'T':
+            if (corner_tr) // col.I.local.0: von der Leitung oben bis unter row.A.long.3
+                poly(g, style, loc, {{KT_X, e - 1}, {KT_X, KT_Y1}});
+            else // P9 bis zur Ecke oben rechts
+                poly(g, style, loc, {{loc.x == 1 ? 0.3f : 0.0f, e}, {loc.x == LAST ? KT_X : 1.0f, e}});
+            break;
+        case 'R':
+            if (corner_tr) // row.A.local.5 unter dem Kanal der Zeile A, dann am Rand hinab
+                poly(g, style, loc, {{KR_X0, KR_Y}, {f, KR_Y}, {f, 1.0f}});
+            else
+                poly(g, style, loc, {{f, 0.0f}, {f, 1.0f}});
+            break;
+        case 'B':
+            if (corner_bl) // col.A.local.5 vom Kanal der Zeile I hinab, dann am Rand nach rechts
+                poly(g, style, loc, {{KB_X, KB_Y0}, {KB_X, f}, {1.0f, f}});
+            else if (loc.x < LAST) // die IOBs der Kachel LAST (P43) liegen links davon
+                poly(g, style, loc, {{0.0f, f}, {1.0f, f}});
+            break;
+        default:
+            if (corner_bl) // am Rand hinab bis unter den Kanal der Zeile I, row.I.local.0 nach rechts
+                poly(g, style, loc, {{e - 1, 0.0f}, {e - 1, KL_Y}, {KL_X1, KL_Y}});
+            else // oben bis zum zweiten IOB der ersten Kachel (P11)
+                poly(g, style, loc, {{e, loc.y == 2 ? -0.05f : 0.0f}, {e, 1.0f}});
+            break;
+        }
+    }
+
+    // Kästchen eines K-Mux: Kreuzung seiner Stichleitung mit der Quelle (oben GCLK: CLK.AA.O endet am
+    // Kachelrand davor, hier bis zur Stichleitung verlängert)
+    void draw_kmux_pip(std::vector<GraphicElement> &g, GraphicElement::style_t style, Loc loc, char side,
+                       int32_t src_id, const Chan &cs) const
+    {
+        switch (side) {
+        case 'T':
+            if (src_id == GFX_WIRE_GCLK) {
+                poly(g, style, loc, {{0.0f, hy(1, H_CLK)}, {KT_X, hy(1, H_CLK)}});
+                pip_box(g, style, loc, KT_X, hy(1, H_CLK));
+            } else if (cs.ok) {
+                pip_box(g, style, loc, KT_X, chan_y(loc, cs));
+            }
+            break;
+        case 'R':
+            if (cs.ok)
+                pip_box(g, style, loc, chan_x(loc, cs, -1), KR_Y);
+            break;
+        case 'B':
+            if (cs.ok)
+                pip_box(g, style, loc, KB_X, chan_y(loc, cs));
+            break;
+        default:
+            if (cs.ok) // auch GCLK (col.A.clk)
+                pip_box(g, style, loc, chan_x(loc, cs, -1), KL_Y);
+            break;
         }
     }
 
@@ -1782,6 +1911,19 @@ struct Xc2064Impl : HimbaechelAPI
                      {{OB_R - ow, OB_BASE}, {OB_R + ow, OB_BASE}, {OB_R, OB_TIP}, {OB_R - ow, OB_BASE}});
             iob_line(g, style, loc, b,
                      {{IB_R - iw, IB_BASE}, {IB_R + iw, IB_BASE}, {IB_R, IB_TIP}, {IB_R - iw, IB_BASE}});
+            // Eingang: direkt oder über das FF (Takt mit Dreieck rechts) in den Eingangsmultiplexer; ist das IOB
+            // belegt, zeigt der Multiplexer den gewählten Weg (XC2000_INFF: über das FF)
+            iob_line(g, style, loc, b, {{I_R, IB_TIP}, {I_R, IN_J_D}});
+            iob_line(g, style, loc, b, {{IN_D_R, IM_D1}, {IN_D_R, IN_J_D}, {IN_Q_R, IN_J_D}, {IN_Q_R, FF_D0}});
+            iob_dot(g, style, loc, b, I_R, IN_J_D);
+            iob_box(g, style, loc, b, FF_R0, FF_D0, FF_R1, FF_D1);
+            iob_line(g, style, loc, b, {{FF_R1, FF_K_D - 0.01f}, {FF_R1 - 0.01f, FF_K_D}, {FF_R1, FF_K_D + 0.01f}});
+            iob_line(g, style, loc, b, {{IN_Q_R, FF_D1}, {IN_Q_R, IM_D1}});
+            iob_mux(g, style, loc, b, IM_R0, IM_R1, IM_D0, IM_D1);
+            if (const CellInfo *ci = ctx->getBoundBelCell(ctx->getBelByLocation(loc)))
+                if (ci->type.in(id_XC2000_INBUF, id_XC2000_IOBUF, id_XC2000_INFF))
+                    iob_line(g, style, loc, b,
+                             {{ci->type == id_XC2000_INFF ? IN_Q_R : IN_D_R, IM_D1}, {I_R, IM_D0}});
             break;
         }
         }
@@ -1904,6 +2046,20 @@ struct Xc2064Impl : HimbaechelAPI
             return;
         }
 
+        // Takt der gelatchten Eingänge: K eines IOB von der Taktleitung außen am Rand zum FF, die Taktleitung
+        // einer Seite (in den Ecken AI und IA mit der Stichleitung ihres K-Mux)
+        if (tilewire == GFX_WIRE_IO0_K || tilewire == GFX_WIRE_IO1_K) {
+            Iob b = iob(loc, tilewire == GFX_WIRE_IO1_K);
+            float de = CLK_EDGE_D - b.off;
+            iob_line(g, style, loc, b, {{K_R, de}, {K_R, FF_K_D}, {FF_R1, FF_K_D}});
+            iob_dot(g, style, loc, b, K_R, de);
+            return;
+        }
+        if (tilewire >= GFX_WIRE_IOCLK_T && tilewire <= GFX_WIRE_IOCLK_L) {
+            draw_iob_clock(g, style, loc, "TRBL"[tilewire - GFX_WIRE_IOCLK_T]);
+            return;
+        }
+
         // IOB: Multiplexer und Leitungen der Pins (Taktpuffer: P9 bzw. P43 kreuzt seine Taktleitung, das
         // Kästchen dort zeichnet der Pip)
         if (tilewire >= GFX_WIRE_IO0_I && tilewire <= GFX_WIRE_IO1_T) {
@@ -1954,6 +2110,14 @@ struct Xc2064Impl : HimbaechelAPI
             }
             return;
         }
+
+        // K-Mux einer Seite (Quelle -> Taktleitung); fest von der Taktleitung zum K eines IOB (Punkt, zeichnet K)
+        if (dst_id >= GFX_WIRE_IOCLK_T && dst_id <= GFX_WIRE_IOCLK_L) {
+            draw_kmux_pip(g, style, loc, "TRBL"[dst_id - GFX_WIRE_IOCLK_T], src_id, cs);
+            return;
+        }
+        if (src_id >= GFX_WIRE_IOCLK_T && src_id <= GFX_WIRE_IOCLK_L)
+            return;
 
         // CLB-intern: Abgriff an Schiene bzw. Verteiler -> Multiplexer-Eingang, benutzt auch weiter zum Ausgang
         bool is_mux = for_muxes(dst_id, [&](const Mux &m) {

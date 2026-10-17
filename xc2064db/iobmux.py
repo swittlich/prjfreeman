@@ -9,7 +9,11 @@ Einträge ohne | oder - sind Direktverbindungen (X/Y einer CLB, Taktleitungen, P
 Die Stichleitungen am Rand (io1-io6, x, clbl, clbr, clbw, local.0, local.5 der Randzeilen und -spalten) sind
 Teile des IOB, keine Routing-Leitungen. Die O- und T-Muxe sind kodiert (Bits "IOB Pnn.O/T MuxBit"), der Code
 der T-Bits wählt zugleich den Modus: Tristate mit Quelle, aus (Ausgang nie aktiv) oder an (immer aktiv).
-Nicht erfasst: die Takte der gelatchten IOBs (kin, K-Muxe von P9, P24, P27, P59).
+
+Takt der gelatchten Eingänge (Data Book: die IOBs einer Chipseite teilen sich einen Takt): je Seite eine
+Taktleitung, an der jedes IOB der Seite fest hängt (iob.js: kin), getrieben von einem K-Mux an einer Ecke mit
+Quellen aus dem Randkanal derselben Seite. Die Bitkarte ordnet die 4 Bits jedes K-Muxes einem Pad zu ("IOB
+P9.K MuxBit", P9 oben, P59 rechts, P27 unten, P24 links), Codes aus iob.js (generateIobPips).
 """
 import collections
 import re
@@ -18,7 +22,23 @@ from . import sources
 
 Entry = collections.namedtuple("Entry", "index spec kind line col row g special")
 # kind: route (Routing-Leitung line), x/y (X bzw. Y der CLB special), gclk, aclk_in (P43 -> ACLK-Puffer),
-#       clb (Pad -> CLB-Pin special), iob (Leitung eines IOB, nicht erfasst)
+#       clb (Pad -> CLB-Pin special), stub (Stichleitung eines IOB special, Signal unbekannt)
+
+# K-Muxe: Pad der Bits -> (Seite, Stichleitung des Muxes an der Ecke, Quellen in der Reihenfolge von iob.js,
+# Code -> Index). "@gclk" ist CLK.AA.O bzw. col.A.clk (GCLK), "@stub:..." eine IOB-Stichleitung unbekannter
+# Herkunft.
+KMUX_SPEC = {
+    "P9": ("T", "col.I.local.0", ["@gclk", "row.A.local.1", "row.A.local.2", "row.A.local.3", "row.A.local.4",
+                                  "row.A.long.3"], {4: 0, 8: 1, 15: 2, 14: 3, 9: 4, 5: 5}),
+    "P59": ("R", "row.A.local.5", ["@stub:col.I.io3", "col.I.long.2", "col.I.local.1", "col.I.local.2",
+                                   "col.I.local.3", "col.I.local.4"], {4: 0, 8: 1, 15: 4, 14: 3, 9: 2, 5: 5}),
+    "P27": ("B", "col.A.local.5", ["@stub:row.I.io4", "row.I.long.1", "row.I.local.1", "row.I.local.2",
+                                   "row.I.local.3", "row.I.local.4"], {4: 2, 8: 4, 15: 5, 14: 0, 2: 1, 3: 3}),
+    "P24": ("L", "row.I.local.0", ["col.A.local.1", "col.A.local.2", "col.A.local.3", "col.A.local.4",
+                                   "col.A.long.3", "@gclk"], {4: 1, 2: 5, 15: 4, 14: 3, 9: 0, 5: 2}),
+}
+SIDES = "TRBL"
+KMux = collections.namedtuple("KMux", "pin side stub sources codes bits")
 
 
 class Iob:
@@ -205,14 +225,40 @@ def iobs(lines, entries):
     return result
 
 
+def kmuxes(lines, entries):
+    """Pad der Bits -> KMux (Quellen als Entry an der Kreuzung mit der Stichleitung, bits: n -> Bitnummer)"""
+    bits = collections.defaultdict(dict)
+    for e in entries:
+        if e.kind == "iobmux" and e.key[1] == "K":
+            bits[e.key[0]][e.key[2]] = e.index
+    result = {}
+    for pin, (side, stub, specs, codes) in KMUX_SPEC.items():
+        sources = []
+        for k, spec in enumerate(specs):
+            if spec.startswith("@"):
+                kind, _, arg = spec[1:].partition(":")
+                sources.append(Entry(k, spec, kind, None, None, None, None, arg or None))
+                continue
+            col, row = (stub, spec) if stub.startswith("col.") else (spec, stub)
+            g = "%dG%d" % (lines.col_info[col][0], lines.row_info[row][0])
+            col, row = lines.canonical_col(col), lines.canonical_row(row)
+            sources.append(Entry(k, spec, "route", row if stub.startswith("col.") else col, col, row, g, None))
+        if sorted(bits[pin]) != [0, 1, 2, 3] or any(c >= 16 for c in codes):
+            raise ValueError("%s.K: Mux-Bits %s bzw. Codes passen nicht" % (pin, sorted(bits[pin])))
+        result[pin] = KMux(pin, side, stub, sources, codes, bits[pin])
+    return result
+
+
 def code(bits, raw):
     return sum(raw[b] << n for n, b in bits.items())
 
 
 def source_name(ent):
-    """Name einer Quelle des O- bzw. T-Mux im Textformat: Leitung, X/Y einer CLB oder GCLK"""
+    """Name einer Quelle des O-, T- bzw. K-Mux im Textformat: Leitung, X/Y einer CLB, GCLK oder Stichleitung"""
     if ent.kind == "route":
         return ent.line
     if ent.kind in ("x", "y"):
         return "%s.%s" % (ent.special, ent.kind.upper())
+    if ent.kind == "stub":
+        return ent.special
     return ent.kind.upper()

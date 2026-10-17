@@ -8,11 +8,12 @@
  *   XC2000_DFF    (CLK, D, S, R -> Q)        das Speicherelement der CLB (FF oder Latch, Parameter
  *                                            LATCH, CLKINV), Daten nur aus F/FG/FGM, asynchrones Set/Reset
  *   XC2000_INBUF  (PAD -> O), XC2000_OUTBUF (I -> PAD)
+ *   XC2000_INFF   (PAD, K -> O)              gelatchter Eingang: FF im IOB, Takt K von der Leitung der Seite
  *   XC2000_TOBUF  (I, T -> PAD), XC2000_IOBUF (I, T -> PAD -> O)   Tristate, T = 1 schaltet ab
  * Präfix XC2000_ für die Familie (wie CC_ bei GateMate).
  *
- * Zusätzlich die Pässe xc2064_fgm (LUTs vor einem FF zum Mux-Modus FGM zusammenfassen) und xc2064_ffbuf
- * (jedem FF einen eigenen treibenden LUT geben).
+ * Zusätzlich die Pässe xc2064_fgm (LUTs vor einem FF zum Mux-Modus FGM zusammenfassen), xc2064_iobff (FF hinter
+ * einem Eingang ins IOB legen) und xc2064_ffbuf (jedem FF einen eigenen treibenden LUT geben).
  *
  *   yosys -m arch/xc2064/yosys/build/xc2064.so -p "synth_xc2064 -json out.json" design.v
  */
@@ -282,6 +283,88 @@ struct Xc2064FgmPass : public Pass
 	}
 } Xc2064FgmPass;
 
+// Gelatchter Eingang (XACT: I:Q, Data Book: "registered input"): das FF im IOB zwischen Pad und Eingang, steigende
+// Flanke, Takt von der Taktleitung der Chipseite, ohne Set/Reset. Der Pass legt ein FF dorthin, dessen D direkt
+// am Eingang eines Pads hängt, wenn sonst nichts diesen Eingang liest: aus XC2000_INBUF und XC2000_DFF wird ein
+// XC2000_INFF. Das spart je Eingang eine CLB.
+struct Xc2064IobFfPass : public Pass
+{
+	Xc2064IobFfPass() : Pass("xc2064_iobff", "XC2064: move input flip-flops into the IOBs") {}
+
+	void help() override
+	{
+		//   |---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|
+		log("\n");
+		log("    xc2064_iobff [selection]\n");
+		log("\n");
+		log("Every IOB of the XC2064 has an edge-triggered D flip-flop between pad and input\n");
+		log("(XACT: I:Q), clocked from the clock line of its side of the die. This pass\n");
+		log("replaces an XC2000_INBUF and the XC2000_DFF it feeds by one XC2000_INFF if the\n");
+		log("flip-flop is the only reader of the pad input, triggers on the rising edge and\n");
+		log("has no set/reset.\n");
+		log("\n");
+	}
+
+	void execute(std::vector<std::string> args, RTLIL::Design *design) override
+	{
+		log_header(design, "Executing XC2064_IOBFF pass.\n");
+		extra_args(args, 1, design);
+
+		TwinePool &tw = design->twines();
+		const IdString inbuf = tw.add("\\XC2000_INBUF"), inff = tw.add("\\XC2000_INFF"), dff = tw.add("\\XC2000_DFF");
+		const IdString port_pad = tw.add("\\PAD"), port_k = tw.add("\\K"), port_clk = tw.add("\\CLK");
+		const IdString port_s = tw.add("\\S"), port_r = tw.add("\\R");
+		const IdString latch = tw.add("\\LATCH"), clkinv = tw.add("\\CLKINV");
+
+		int moved = 0;
+		for (auto module : design->selected_modules()) {
+			SigMap sigmap(module);
+			dict<SigBit, int> readers; // lesende Zellen-Ports und Ausgänge des Moduls
+			dict<SigBit, Cell *> inbuf_of;
+			for (auto cell : module->cells()) {
+				if (cell->type == inbuf)
+					inbuf_of[sigmap(cell->getPort(ID(O))).as_bit()] = cell;
+				for (auto &conn : cell->connections())
+					if (cell->input(conn.first))
+						for (auto bit : sigmap(conn.second))
+							readers[bit]++;
+			}
+			for (auto wire : module->wires())
+				if (wire->port_output)
+					for (auto bit : sigmap(wire))
+						readers[bit]++;
+
+			auto inactive = [&](Cell *cell, IdString port) { // Set/Reset offen oder konstant aus
+				if (!cell->hasPort(port))
+					return true;
+				for (auto bit : sigmap(cell->getPort(port)))
+					if (bit.wire || bit.data == State::S1)
+						return false;
+				return true;
+			};
+			for (auto ff : module->selected_cells()) {
+				if (ff->type != dff || ff->getParam(latch).as_bool() || ff->getParam(clkinv).as_bool() ||
+				    !inactive(ff, port_s) || !inactive(ff, port_r))
+					continue;
+				SigBit d = sigmap(ff->getPort(ID(D))).as_bit();
+				auto it = inbuf_of.find(d);
+				if (it == inbuf_of.end() || readers[d] != 1)
+					continue;
+				Cell *buf = it->second;
+				Cell *cell = module->addCell(NEW_ID, inff);
+				cell->setPort(port_pad, buf->getPort(port_pad));
+				cell->setPort(port_k, ff->getPort(port_clk));
+				cell->setPort(ID(O), ff->getPort(ID(Q)));
+				inbuf_of.erase(it);
+				module->remove(ff);
+				module->remove(buf);
+				moved++;
+			}
+		}
+		log("Moved %d input flip-flops into IOBs (XC2000_INFF).\n", moved);
+	}
+} Xc2064IobFfPass;
+
 struct SynthXc2064Pass : public ScriptPass
 {
 	SynthXc2064Pass() : ScriptPass("synth_xc2064", "synthesis for the XC2064 FPGA model") {}
@@ -308,6 +391,9 @@ struct SynthXc2064Pass : public ScriptPass
 		log("    -nofgm\n");
 		log("        do not use the FGM mux mode (xc2064_fgm)\n");
 		log("\n");
+		log("    -noiobff\n");
+		log("        keep input flip-flops in the CLBs (xc2064_iobff moves them into the IOBs)\n");
+		log("\n");
 		log("    -run <from_label>:<to_label>\n");
 		log("        only run the commands between the labels (see below). an empty\n");
 		log("        from label is synonymous to 'begin', and empty to label is\n");
@@ -319,7 +405,7 @@ struct SynthXc2064Pass : public ScriptPass
 	}
 
 	std::string top_opt, json_file;
-	bool noiopad, nofgm;
+	bool noiopad, nofgm, noiobff;
 
 	void clear_flags() override
 	{
@@ -327,6 +413,7 @@ struct SynthXc2064Pass : public ScriptPass
 		json_file = "";
 		noiopad = false;
 		nofgm = false;
+		noiobff = false;
 	}
 
 	void execute(std::vector<std::string> args, RTLIL::Design *design) override
@@ -350,6 +437,10 @@ struct SynthXc2064Pass : public ScriptPass
 			}
 			if (args[argidx] == "-nofgm") {
 				nofgm = true;
+				continue;
+			}
+			if (args[argidx] == "-noiobff") {
+				noiobff = true;
 				continue;
 			}
 			if (args[argidx] == "-run" && argidx + 1 < args.size()) {
@@ -429,6 +520,9 @@ struct SynthXc2064Pass : public ScriptPass
 			// Mux-Modus FGM: LUTs vor einem FF mit Rückführung von Q zu einer Funktion von 5 Signalen
 			if (!nofgm || help_mode)
 				run("xc2064_fgm", "(unless -nofgm)");
+			// FF direkt hinter einem Eingang: in das IOB (gelatchter Eingang)
+			if (!noiobff || help_mode)
+				run("xc2064_iobff", "(unless -noiobff)");
 			run("xc2064_ffbuf");
 			run("opt_clean");
 		}

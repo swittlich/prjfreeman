@@ -6,9 +6,11 @@ CLB-Eingänge und die Ausgangs- und T-Muxe der Pads. Aus jeder CLB entstehen die
 beschreibt (blocks.py): Funktionsgeneratoren als XC2000_LUT3 (F, G), XC2000_LUT4 (BASE F, B wählt) bzw.
 XC2000_FGM (BASE FGM, B wählt zwischen F und G mit eigenen Eingängen), das Speicherelement als XC2000_DFF, wenn
 sein Takt eingeschaltet ist. Pads werden IO-Puffer nach dem Modus
-des T-Muxes (aus: INBUF, an: OUTBUF, sonst TOBUF bzw. IOBUF).
+des T-Muxes (aus: INBUF, an: OUTBUF, sonst TOBUF bzw. IOBUF), ein gelatchter Eingang (I:Q) XC2000_INFF mit dem
+Takt der Leitung seiner Seite.
 
-Der Bitstream kennt keine Namen: Ports (Pad -> Name, Richtung) und Register (CLB -> Name des Q-Netzes) kommen
+Der Bitstream kennt keine Namen: Ports (Pad -> Name, Richtung) und Register (CLB bzw. Pad mit gelatchtem
+Eingang -> Name des Q-Netzes) kommen
 aus den Zeilen "port" und "reg" der Textdatei, die nextpnr mit --vopt out= schreibt. Pads ohne Port bleiben
 unbenutzt.
 """
@@ -29,12 +31,13 @@ def _find(parent, n):
 
 
 def build(db, raw, ports, regs, g=None):
-    """Verilog-Text. ports: {Pin: (Name, Richtung)}, regs: {CLB: Name}. Fehler: ValueError."""
+    """Verilog-Text. ports: {Pin: (Name, Richtung)}, regs: {CLB oder Pin: Name}. Fehler: ValueError."""
     g = g or graph_mod.Graph(db.entries, db.lines)
     items, problems = config.decode(db, raw)
     if problems:
         raise ValueError("; ".join(problems[:3]))
     clb = {it.name: blocks.parse_fields(it.value) for it in items if it.kind == "clb"}
+    iob = {it.name: blocks.parse_fields(it.value) for it in items if it.kind == "iob"}
     tmode = {it.name[:-2]: it.value for it in items if it.kind == "mux" and it.name.endswith(".T")}
 
     parent = {}
@@ -46,7 +49,9 @@ def build(db, raw, ports, regs, g=None):
     for n in list(parent):
         members[root(n)].append(n)
     is_driver = lambda n: re.fullmatch(r"[A-H][A-H]\.[XY]|P\d+\.I", n)  # noqa: E731
-    is_sink = lambda n: re.fullmatch(r"[A-H][A-H]\.[ABCDK]|P\d+\.[OT]", n)  # noqa: E731
+    latched = lambda p: iob[p]["I"] == "Q"  # noqa: E731
+    is_sink = lambda n: (re.fullmatch(r"[A-H][A-H]\.[ABCDK]|P\d+\.[OT]", n)  # noqa: E731
+                         or (re.fullmatch(r"P\d+\.K", n) and latched(n[:-2])))
 
     # Treiber je Netz; Name des Drahts = Name des Treibers
     wire_of = {}  # Knoten -> Drahtname (nur Netze mit Treiber)
@@ -143,7 +148,14 @@ def build(db, raw, ports, regs, g=None):
     # IO-Puffer an den Pads mit Port
     for pin, (name, d) in sorted(ports.items(), key=lambda kv: int(kv[0][1:])):
         mode = tmode.get(pin, "off")
-        if mode == "off":
+        if latched(pin) and mode != "off":
+            raise ValueError("%s: gelatchter Eingang mit Ausgangstreiber wird nicht nachgebildet" % pin)
+        if latched(pin):  # FF im IOB, Takt von der Leitung der Seite (K-Mux)
+            cells.append(("XC2000_INFF", pin + ".BUF", {}, {"PAD": ("port", name), "K": net(pin + ".K"),
+                                                             "O": pin + ".I"}))
+            if pin in regs:
+                names[pin + ".I"] = regs[pin]
+        elif mode == "off":
             cells.append(("XC2000_INBUF", pin + ".BUF", {}, {"PAD": ("port", name), "O": pin + ".I"}))
         elif mode == "on":
             cells.append(("XC2000_OUTBUF", pin + ".BUF", {}, {"I": net(pin + ".O"), "PAD": ("port", name)}))

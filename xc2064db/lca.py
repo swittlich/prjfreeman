@@ -61,9 +61,16 @@ def classify(elements):
 
 
 def check_elements(nets, items, db):
-    """Elemente von XACT, die in der Dekodierung (config.decode) fehlen: {Art: [Name, ...]}, dazu Zähler.
-    IOB-Elemente "LINE:PADn.O/T" sind Mux-Quellen, "LINE:PADn.I" Eingangs-Pips (Lage aus iob.js);
-    Takte der gelatchten IOBs (.K und die Kreuzungen ihrer Muxe, ohne PIP-Bit) zählen unter "iob-k"."""
+    """Elemente von XACT, die in der Dekodierung (config.decode) fehlen: {Art: [Name, ...]}, dazu Zähler und die
+    Kreuzungen an K-Muxen als Mux-Zeilen. IOB-Elemente "LINE:PADn.O/T" sind Mux-Quellen, "LINE:PADn.I"
+    Eingangs-Pips (Lage aus iob.js); Takte der gelatchten IOBs (.K und die Kreuzungen ohne PIP-Bit an den
+    K-Muxen) zählen unter "iob-k" und werden nicht geprüft (TEST1 nennt am K-Mux oben zwei Quellen)."""
+    kmux_at = {}  # "col:row" der Kreuzung mit der Stichleitung -> "Pnn.K Quelle"
+    for pin, km in db.kmuxes.items():
+        for ent in km.sources:
+            if ent.kind == "route":
+                kmux_at["%s:%s" % (ent.col, ent.row)] = "%s.K %s" % (pin, ent.line)
+    kmux = []
     have = set()
     for it in items:
         if it.kind == "switch":
@@ -102,10 +109,12 @@ def check_elements(nets, items, db):
                 kind, name = "pip", "%s:%s" % (line, row)
             if kind == "pip" and name not in pip_names:
                 kind = "iob-k"  # Kreuzung ohne PIP-Bit: Quelle eines K-Mux (Takt gelatchter IOBs)
+                if name in kmux_at:
+                    kmux.append(kmux_at[name])
             count[kind] += 1
             if kind != "iob-k" and (kind, name) not in have:
                 missing[kind].append(name)
-    return missing, count
+    return missing, count, kmux
 
 
 def check_nets(nets, graph, raw, skip=()):

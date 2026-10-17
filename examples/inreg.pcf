@@ -1,0 +1,15 @@
+# Pin-Zuordnung für inreg.v: set_io <Port> <PLCC68-Pin>
+# d[1:0] oben, d[3:2] links (zwei Seiten, zwei K-Muxe), q rechts, rise unten
+set_io clk     P9
+set_io d[0]    P8
+set_io d[1]    P7
+set_io d[2]    P12
+set_io d[3]    P13
+set_io q[0]    P59
+set_io q[1]    P58
+set_io q[2]    P57
+set_io q[3]    P56
+set_io rise[0] P42
+set_io rise[1] P41
+set_io rise[2] P40
+set_io rise[3] P39

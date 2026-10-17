@@ -77,6 +77,20 @@ module XC2000_INBUF (
 	assign O = PAD;
 endmodule
 
+// Gelatchter Eingang (XACT: I:Q, Data Book: "registered input"): ein flankengesteuertes D-FF zwischen Pad und
+// Eingang, Takt K mit steigender Flanke (Data Book S. 2-214: Setup und Hold an der steigenden Flanke von L).
+// K kommt von der Taktleitung der Chipseite, alle IOBs einer Seite teilen sie. Gelöscht beim Konfigurieren
+// (und durch RESET, nicht nachgebildet), kein Set/Reset, keine Taktumkehr.
+module XC2000_INFF (
+	input      PAD,
+	input      K,
+	output reg O
+);
+	initial O = 1'b0;
+	always @(posedge K)
+		O <= PAD;
+endmodule
+
 module XC2000_OUTBUF (
 	input  I,
 	output PAD

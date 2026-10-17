@@ -17,9 +17,9 @@ Felder wie in XACTs LCA-Datei (Config), dazu BASE und die Tabellen, im Textforma
          Dekoder verwechselt hier K und G): Bit "CLB AB" wählt C; sonst gilt K, wenn der K-Mux eine Quelle hat,
          und G, wenn nicht, wobei G gegenüber K invertiert ankommt; ein Latch kehrt das Bit CLK Invert um.
 
-IOB (je Pad): "iob P8 I:Q K:3" mit I = PAD (Bit I PAD/Latched gesetzt) oder Q (gelatcht) und, nur an den vier
-Pads mit Takt-Mux für die gelatchten Eingänge (iob.js: P9, P24, P27, P59 ...), dessen Code K (ohne Bedeutung
-im Modell). Die O- und T-Muxe stehen als "mux Pnn.O/T" (config.py).
+IOB (je Pad): "iob P8 I:Q" mit I = PAD (Bit I PAD/Latched gesetzt) oder Q (gelatcht: das FF im Eingang, Takt
+von der Leitung der Chipseite). Die O-, T- und K-Muxe stehen als "mux Pnn.O/T/K" (config.py, K nur an P9,
+P59, P27, P24: der Takt-Mux der Seite).
 
 Optionen: "other <Name>: 0|1" für die 8 Bits "Other" (DONE-Pull-up, Readback, TTL/CMOS, unbekannte).
 
@@ -47,8 +47,6 @@ class Blocks:
                              for m in [re.match(r"CLB ([A-H][A-H])", e.text)] if m})
         self.pads = sorted({m[1] for e in self.entries
                             for m in [re.match(r"IOB (P\d+)\.I PAD/Latched", e.text)] if m}, key=lambda p: int(p[1:]))
-        self.kbits = {p: [self.byname["IOB %s.K MuxBit: %d" % (p, n)] for n in range(4)]
-                      for p in self.pads if "IOB %s.K MuxBit: 0" % p in self.byname}
         self.others = [e.text[len("Other "):] for e in self.entries if e.kind == "other"]
         self.clb_bitset = {t: self._clb_bits(t) for t in self.tiles}
 
@@ -162,23 +160,18 @@ def parse_fields(text):
 
 
 def decode_iob(bl, raw, pin):
-    f = {"I": "PAD" if _p(raw, bl.bit("IOB %s.I PAD/Latched" % pin)) else "Q"}
-    if pin in bl.kbits:
-        f["K"] = str(sum(_p(raw, b) << n for n, b in enumerate(bl.kbits[pin])))
-    return f
+    return {"I": "PAD" if _p(raw, bl.bit("IOB %s.I PAD/Latched" % pin)) else "Q"}
 
 
 def encode_iob(bl, pin, f):
-    out = {bl.bit("IOB %s.I PAD/Latched" % pin): int(f.get("I", "PAD") == "PAD")}
-    if pin in bl.kbits:
-        k = int(f.get("K", "0"))
-        out.update({b: (k >> n) & 1 for n, b in enumerate(bl.kbits[pin])})
-    return out
+    if set(f) - {"I"}:
+        raise ValueError("IOB %s: unbekannte Felder %s (Takt-Mux jetzt als mux %s.K)" % (pin, sorted(set(f) - {"I"}), pin))
+    return {bl.bit("IOB %s.I PAD/Latched" % pin): int(f.get("I", "PAD") == "PAD")}
 
 
 DEFAULT_CLB = {"BASE": "FG", "F": "B:C:Q", "G": "B:C:Q", "LUTF": "00", "LUTG": "00", "X": "Q", "Y": "Q",
                "Q": "LATCH", "SET": "", "RES": "", "CLK": ""}
-DEFAULT_IOB = {"I": "PAD", "K": "0"}
+DEFAULT_IOB = {"I": "PAD"}
 
 
 def lut_inputs(f, lut):
