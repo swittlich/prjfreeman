@@ -13,6 +13,18 @@ set(HIMBAECHEL_XC2064_DEVICES ${ALL_HIMBAECHEL_XC2064_DEVICES} CACHE STRING
     "Include support for these Xc2064 devices (available: ${ALL_HIMBAECHEL_XC2064_DEVICES})")
 message(STATUS "Enabled Himbaechel-Xc2064 devices: ${HIMBAECHEL_XC2064_DEVICES}")
 
+# Datenquellen des Generators in arch/xc2064 (über den Symlink in upstream/nextpnr aufgelöst): das Paket
+# xc2064db und Shirriffs Dateien im Submodule. Ändert sich eine davon, entsteht die Chipdb neu.
+get_filename_component(XC2064_NEXTPNR_DIR ${CMAKE_CURRENT_SOURCE_DIR} REALPATH)
+get_filename_component(XC2064_ARCH_DIR ${XC2064_NEXTPNR_DIR} DIRECTORY)
+file(GLOB XC2064_DB_SOURCES CONFIGURE_DEPENDS ${XC2064_ARCH_DIR}/xc2064db/*.py)
+set(XC2064_DATA
+    ${XC2064_ARCH_DIR}/shirriff-xc2064/html/XC2064-def.txt
+    ${XC2064_ARCH_DIR}/shirriff-xc2064/html/draw.js
+    ${XC2064_ARCH_DIR}/shirriff-xc2064/html/clb.js
+    ${XC2064_ARCH_DIR}/shirriff-xc2064/html/iob.js
+)
+
 foreach (device ${HIMBAECHEL_XC2064_DEVICES})
     if (NOT device IN_LIST ALL_HIMBAECHEL_XC2064_DEVICES)
         message(FATAL_ERROR "Device ${device} is not a supported Xc2064 device")
@@ -29,6 +41,8 @@ foreach (device ${HIMBAECHEL_XC2064_DEVICES})
             ${CMAKE_CURRENT_SOURCE_DIR}/xc2064_arch_gen.py
             ${CMAKE_CURRENT_SOURCE_DIR}/constids.inc
             ${CMAKE_CURRENT_SOURCE_DIR}/gfxids.inc
+            ${XC2064_DB_SOURCES}
+            ${XC2064_DATA}
     )
 
     add_bba_compile_command(

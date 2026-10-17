@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""xc2064unpack: XC2064-Bitstream (.BIT oder .RBT von XACT) -> Konfiguration als Text (Format siehe
+xc2064db/config.py). Endet mit Fehler, wenn ein programmiertes Bit oder ein Mux-Code nicht in der Bitkarte
+steht.
+
+    xc2064unpack COUNTER.BIT [-o COUNTER.txt]
+"""
+import argparse
+import collections
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+from xc2064db import bitstream, config, graph  # noqa: E402
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("bitstream", help=".BIT oder .RBT")
+    ap.add_argument("-o", "--output", help="Textdatei (ohne: stdout)")
+    args = ap.parse_args()
+
+    bs = bitstream.read(args.bitstream)
+    db = config.Database()
+    items, problems = config.decode(db, bs.raw)
+    text = config.format_text(items, "%s (%s)" % (os.path.basename(args.bitstream), bs.fmt))
+    if args.output:
+        with open(args.output, "w") as f:
+            f.write(text)
+    else:
+        sys.stdout.write(text)
+
+    count = collections.Counter(it.kind for it in items)
+    zeros = sum(1 for b in bs.raw if b == 0)
+    print("xc2064unpack: %s: %d programmierte Bits; %s; %d Probleme" % (
+        os.path.basename(args.bitstream), zeros, ", ".join("%d %s" % (count[k], k) for k in
+                                                          ("mux", "pip", "switch", "bidi", "bit")),
+        len(problems)), file=sys.stderr)
+    # Routing-Graph des Modells (xc2064db.graph): welche programmierten Pips und Switch-Verbindungen er kennt
+    by_bit = graph.Graph(db.entries, db.lines).by_bit()
+    conns = [it for it in items if it.kind in ("pip", "switch")]
+    outside = [it for it in conns if not any(b in by_bit for b in it.bits)]
+    print("xc2064unpack: %d von %d Pips und Switch-Verbindungen im Routing-Graphen%s" % (
+        len(conns) - len(outside), len(conns),
+        " (übrige an IOB-Leitungen, Stufe 3: %s)" % " ".join(it.name for it in outside[:4]) if outside else ""),
+        file=sys.stderr)
+    for n in bs.notes:
+        print("xc2064unpack: Hinweis: " + n, file=sys.stderr)
+    for p in problems:
+        print("xc2064unpack: FEHLER: " + p, file=sys.stderr)
+    return 1 if problems else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
