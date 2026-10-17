@@ -1,0 +1,22 @@
+# Pin-Zuordnung für shiftreg.v: set_io <Port> <PLCC68-Pin>
+# Takt und Steuerung oben links, din am oberen Rand, q am rechten Rand
+set_io clk    P9
+set_io load   P8
+set_io en     P7
+set_io sin    P6
+set_io din[0] P5
+set_io din[1] P4
+set_io din[2] P3
+set_io din[3] P2
+set_io din[4] P68
+set_io din[5] P67
+set_io din[6] P66
+set_io din[7] P65
+set_io q[0]   P59
+set_io q[1]   P58
+set_io q[2]   P57
+set_io q[3]   P56
+set_io q[4]   P55
+set_io q[5]   P54
+set_io q[6]   P53
+set_io q[7]   P51

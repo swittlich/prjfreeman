@@ -2,6 +2,7 @@
 # Regressionstest für xc2064: Synthese, Place & Route über mehrere Seeds (mit und ohne PCF) und ein
 # formaler Vergleich jedes Ergebnisses mit dem RTL.
 #   test/run.sh [design.v ...]          ohne Argument alle examples/*.v
+# Zeilen "// erwartet: <Zelltyp> <Anzahl>" im Design prüfen die Synthese (etwa XC2000_FGM in shiftreg.v).
 # Spalten je Lauf:
 #   PnR    nextpnr endet ohne Fehler innerhalb von TIMEOUT Sekunden (router2 hat kein Abbruchlimit)
 #   Netz   die Netzliste nach dem Routing (*.pnr.json, also nach pack()) ist äquivalent zum RTL, mit
@@ -109,6 +110,18 @@ for d in "${designs[@]}"; do
 	if ! "$YOSYS" -q -l "$dir/yosys.log" -m "$ARCH/yosys/build/xc2064.so" -p "synth_xc2064 -json $dir/$name.json" \
 		"$d" >/dev/null 2>&1; then
 		row "$name" - - "Synthese fehlgeschlagen ($dir/yosys.log)"
+		runs=$((runs + 1))
+		failed=$((failed + 1))
+		continue
+	fi
+	# erwartete Zellzahlen (Statistik am Ende von synth_xc2064)
+	wrong=""
+	while read -r typ n; do
+		got="$(awk -v t="$typ" '$2 == t { c = $1 } END { print c + 0 }' "$dir/yosys.log")"
+		[[ $got -eq $n ]] || wrong+=" $typ $got statt $n"
+	done < <(sed -n 's|^// *erwartet: *\([A-Za-z0-9_]*\) *\([0-9]*\).*|\1 \2|p' "$d")
+	if [[ -n $wrong ]]; then
+		row "$name" - - "Synthese:$wrong ($dir/yosys.log)"
 		runs=$((runs + 1))
 		failed=$((failed + 1))
 		continue

@@ -4,13 +4,15 @@
  * Erzeugt die Zellen, die die nextpnr-Himbächel-uarch "xc2064" erwartet:
  *   XC2000_LUT3   (I[2:0] -> O, INIT[7:0])   Funktionsgenerator F oder G
  *   XC2000_LUT4   (I[3:0] -> O, INIT[15:0])  F und G gemeinsam (Funktion von 4 Variablen)
+ *   XC2000_FGM    (F[2:0], G[2:0], S -> O, INIT_F, INIT_G)  Mux-Modus: S (= B) wählt zwischen F und G
  *   XC2000_DFF    (CLK, D, S, R -> Q)        das Speicherelement der CLB (FF oder Latch, Parameter
- *                                            LATCH, CLKINV), Daten nur aus F/FG, asynchrones Set/Reset
+ *                                            LATCH, CLKINV), Daten nur aus F/FG/FGM, asynchrones Set/Reset
  *   XC2000_INBUF  (PAD -> O), XC2000_OUTBUF (I -> PAD)
  *   XC2000_TOBUF  (I, T -> PAD), XC2000_IOBUF (I, T -> PAD -> O)   Tristate, T = 1 schaltet ab
  * Präfix XC2000_ für die Familie (wie CC_ bei GateMate).
  *
- * Zusätzlich der Pass xc2064_ffbuf: gibt jedem FF einen eigenen treibenden LUT.
+ * Zusätzlich die Pässe xc2064_fgm (LUTs vor einem FF zum Mux-Modus FGM zusammenfassen) und xc2064_ffbuf
+ * (jedem FF einen eigenen treibenden LUT geben).
  *
  *   yosys -m arch/xc2064/yosys/build/xc2064.so -p "synth_xc2064 -json out.json" design.v
  */
@@ -41,7 +43,7 @@ struct Xc2064FfBufPass : public Pass
 		log("In the XC2064 the flip-flop data input is fed only by the F function generator of\n");
 		log("the same CLB. This pass inserts an XC2000_LUT3 buffer (INIT 8'hAA, O = I[0]) in\n");
 		log("front of every XC2000_DFF whose D input is not driven exclusively by an\n");
-		log("XC2000_LUT3/XC2000_LUT4.\n");
+		log("XC2000_LUT3/XC2000_LUT4/XC2000_FGM.\n");
 		log("\n");
 	}
 
@@ -53,7 +55,7 @@ struct Xc2064FfBufPass : public Pass
 		// Eigene Zelltypen stehen nicht in yosys' kernel/constids.inc (ID(...) geht nur dafür),
 		// sondern werden im TwinePool des Designs angelegt.
 		TwinePool &tw = design->twines();
-		const IdString lut3 = tw.add("\\XC2000_LUT3"), lut4 = tw.add("\\XC2000_LUT4");
+		const IdString lut3 = tw.add("\\XC2000_LUT3"), lut4 = tw.add("\\XC2000_LUT4"), fgm = tw.add("\\XC2000_FGM");
 		const IdString dff = tw.add("\\XC2000_DFF");
 
 		int inserted = 0;
@@ -61,7 +63,7 @@ struct Xc2064FfBufPass : public Pass
 			SigMap sigmap(module);
 			dict<SigBit, Cell *> lut_driver;
 			for (auto cell : module->cells())
-				if (cell->type.in(lut3, lut4))
+				if (cell->type.in(lut3, lut4, fgm))
 					for (auto bit : sigmap(cell->getPort(ID(O))))
 						lut_driver[bit] = cell;
 
@@ -93,6 +95,193 @@ struct Xc2064FfBufPass : public Pass
 	}
 } Xc2064FfBufPass;
 
+// Mux-Modus FGM (Data Book: "Option 3"): B wählt zwischen den Tabellen F und G, die hier eigene Eingänge haben
+// (je 1 aus A/B, 2 aus B/C, 3 aus C/D/Q). Gegenüber einer Funktion von 4 Variablen gewinnt das nur, wenn eine
+// Tabelle D und die andere das Q des eigenen Speicherelements liest: D und Q gehen nie in dieselbe Tabelle.
+// Nach dem LUT-Mapping fasst der Pass daher den LUT vor einem Speicherelement mit LUTs davor (die nur ihn
+// speisen) zusammen, wenn das Ganze eine Funktion von genau 5 Signalen ist, darunter das eigene Q, und die
+// Form S ? f(a, c, x) : g(a, c, Q) hat (oder F und G vertauscht). Daraus wird ein XC2000_FGM: S an B,
+// a an Eingang 1, c an Eingang 2, x bzw. Q an Eingang 3.
+struct Xc2064FgmPass : public Pass
+{
+	Xc2064FgmPass() : Pass("xc2064_fgm", "XC2064: merge LUTs in front of a flip-flop into the FGM mux mode") {}
+
+	void help() override
+	{
+		//   |---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|
+		log("\n");
+		log("    xc2064_fgm [selection]\n");
+		log("\n");
+		log("In the FGM mode of an XC2064 CLB the input B selects between the function tables\n");
+		log("F and G, each with its own three inputs. This gives functions of five signals of\n");
+		log("the form S ? f(a, c, x) : g(a, c, Q), where Q is the CLB's own storage element\n");
+		log("(D and Q never feed the same table). For every XC2000_DFF this pass merges the\n");
+		log("XC2000_LUT3/XC2000_LUT4 driving D with LUTs in front of it that feed nothing\n");
+		log("else, if the result has this form, and replaces them by one XC2000_FGM.\n");
+		log("\n");
+	}
+
+	// Wert eines Signals für eine Belegung der Blätter (Bit i von env = Blatt i), LUTs aus 'inner' ausgewertet
+	static bool eval(SigBit bit, const std::vector<SigBit> &leaves, int env, const dict<SigBit, Cell *> &inner,
+			 const SigMap &sigmap)
+	{
+		for (size_t i = 0; i < leaves.size(); i++)
+			if (leaves[i] == bit)
+				return (env >> i) & 1;
+		if (!bit.wire)
+			return bit.data == State::S1; // x: der LUT-Inhalt hängt davon nicht ab
+		Cell *lut = inner.at(bit);
+		SigSpec in = sigmap(lut->getPort(ID(I)));
+		int idx = 0;
+		for (int k = 0; k < GetSize(in); k++)
+			idx |= int(eval(in[k], leaves, env, inner, sigmap)) << k;
+		return lut->getParam(ID(INIT))[idx] == State::S1;
+	}
+
+	void execute(std::vector<std::string> args, RTLIL::Design *design) override
+	{
+		log_header(design, "Executing XC2064_FGM pass.\n");
+		extra_args(args, 1, design);
+
+		TwinePool &tw = design->twines();
+		const IdString lut3 = tw.add("\\XC2000_LUT3"), lut4 = tw.add("\\XC2000_LUT4"), fgm = tw.add("\\XC2000_FGM");
+		const IdString dff = tw.add("\\XC2000_DFF");
+		const IdString port_f = tw.add("\\F"), port_g = tw.add("\\G"), port_s = tw.add("\\S");
+		const IdString init_f = tw.add("\\INIT_F"), init_g = tw.add("\\INIT_G");
+
+		int merged = 0, removed = 0;
+		for (auto module : design->selected_modules()) {
+			SigMap sigmap(module);
+			dict<SigBit, Cell *> lut_driver;
+			dict<SigBit, pool<Cell *>> users; // Zellen, die ein Signal lesen
+			pool<SigBit> port_out;            // Signale an Ausgängen des Moduls
+			for (auto cell : module->cells())
+				for (auto &conn : cell->connections()) {
+					if (cell->type.in(lut3, lut4) && conn.first == ID(O))
+						for (auto bit : sigmap(conn.second))
+							lut_driver[bit] = cell;
+					else if (cell->input(conn.first))
+						for (auto bit : sigmap(conn.second))
+							users[bit].insert(cell);
+				}
+			for (auto wire : module->wires())
+				if (wire->port_output)
+					for (auto bit : sigmap(wire))
+						port_out.insert(bit);
+
+			pool<Cell *> gone;
+			for (auto ff : module->selected_cells()) {
+				if (ff->type != dff || gone.count(ff))
+					continue;
+				SigBit q = sigmap(ff->getPort(ID(Q))).as_bit(), d = sigmap(ff->getPort(ID(D))).as_bit();
+				auto ld = lut_driver.find(d);
+				if (ld == lut_driver.end() || gone.count(ld->second))
+					continue;
+				Cell *top = ld->second;
+				// LUTs vor dem D-LUT, die nur ihn speisen
+				std::vector<SigBit> top_in;
+				for (auto bit : sigmap(top->getPort(ID(I))))
+					if (bit.wire && std::find(top_in.begin(), top_in.end(), bit) == top_in.end())
+						top_in.push_back(bit);
+				std::vector<SigBit> cand;
+				for (auto bit : top_in) {
+					auto it = lut_driver.find(bit);
+					if (it != lut_driver.end() && it->second != top && !gone.count(it->second) &&
+					    users[bit] == pool<Cell *>{top} && !port_out.count(bit))
+						cand.push_back(bit);
+				}
+				// Teilmengen, die größten zuerst: je mehr LUTs aufgehen, desto besser
+				std::vector<int> subsets;
+				for (int m = 1; m < (1 << GetSize(cand)); m++)
+					subsets.push_back(m);
+				std::stable_sort(subsets.begin(), subsets.end(),
+						 [](int a, int b) { return __builtin_popcount(a) > __builtin_popcount(b); });
+				for (int m : subsets) {
+					dict<SigBit, Cell *> inner;
+					inner[d] = top;
+					for (int k = 0; k < GetSize(cand); k++)
+						if ((m >> k) & 1)
+							inner[cand[k]] = lut_driver.at(cand[k]);
+					std::vector<SigBit> leaves;
+					for (auto &it : inner)
+						for (auto bit : sigmap(it.second->getPort(ID(I))))
+							if (bit.wire && !inner.count(bit) &&
+							    std::find(leaves.begin(), leaves.end(), bit) == leaves.end())
+								leaves.push_back(bit);
+					if (GetSize(leaves) != 5 || std::find(leaves.begin(), leaves.end(), q) == leaves.end())
+						continue;
+					uint32_t tt = 0;
+					for (int env = 0; env < 32; env++)
+						tt |= uint32_t(eval(d, leaves, env, inner, sigmap)) << env;
+					if (try_fgm(module, top, leaves, tt, q, fgm, port_f, port_g, port_s, init_f, init_g)) {
+						for (auto &it : inner)
+							gone.insert(it.second);
+						merged++;
+						removed += GetSize(inner);
+						break;
+					}
+				}
+			}
+			for (auto cell : gone)
+				module->remove(cell);
+		}
+		log("Merged %d LUTs into %d XC2000_FGM cells.\n", removed, merged);
+	}
+
+	// Hängt die Funktion tt der 5 Blätter von Blatt v ab, wenn Blatt s den Wert sv hat?
+	static bool depends(uint32_t tt, int s, int sv, int v)
+	{
+		for (int env = 0; env < 32; env++)
+			if (((env >> s) & 1) == sv && !((env >> v) & 1) && ((tt >> env) & 1) != ((tt >> (env | 1 << v)) & 1))
+				return true;
+		return false;
+	}
+
+	static bool try_fgm(Module *module, Cell *top, const std::vector<SigBit> &leaves, uint32_t tt, SigBit q,
+			    IdString fgm, IdString port_f, IdString port_g, IdString port_s, IdString init_f, IdString init_g)
+	{
+		int iq = std::find(leaves.begin(), leaves.end(), q) - leaves.begin();
+		for (int s = 0; s < 5; s++) {
+			if (s == iq)
+				continue;
+			for (int x = 0; x < 5; x++) {
+				if (x == iq || x == s)
+					continue;
+				// Tabelle F (S = 1) und G (S = 0): welche liest x, welche Q?
+				for (int f_reads_q = 0; f_reads_q < 2; f_reads_q++) {
+					int in3_f = f_reads_q ? iq : x, in3_g = f_reads_q ? x : iq;
+					if (depends(tt, s, 1, in3_g) || depends(tt, s, 0, in3_f))
+						continue;
+					std::vector<int> ac; // die beiden übrigen Blätter: Eingang 1 und 2 beider Tabellen
+					for (int v = 0; v < 5; v++)
+						if (v != s && v != iq && v != x)
+							ac.push_back(v);
+					Cell *cell = module->addCell(NEW_ID, fgm);
+					for (int half = 0; half < 2; half++) { // 0: F (S = 1), 1: G (S = 0)
+						int sv = half ? 0 : 1, in[3] = {ac[0], ac[1], half ? in3_g : in3_f};
+						uint32_t init = 0;
+						for (int idx = 0; idx < 8; idx++) {
+							int env = sv << s;
+							for (int k = 0; k < 3; k++)
+								env |= ((idx >> k) & 1) << in[k];
+							init |= ((tt >> env) & 1) << idx;
+						}
+						SigSpec pins;
+						for (int k = 0; k < 3; k++) // nur Eingänge, von denen die Tabelle abhängt
+							pins.append(depends(tt, s, sv, in[k]) ? SigSpec(leaves[in[k]]) : SigSpec(State::Sx));
+						cell->setPort(half ? port_g : port_f, pins);
+						cell->setParam(half ? init_g : init_f, Const(init, 8));
+					}
+					cell->setPort(port_s, leaves[s]);
+					cell->setPort(ID(O), top->getPort(ID(O)));
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+} Xc2064FgmPass;
+
 struct SynthXc2064Pass : public ScriptPass
 {
 	SynthXc2064Pass() : ScriptPass("synth_xc2064", "synthesis for the XC2064 FPGA model") {}
@@ -104,8 +293,8 @@ struct SynthXc2064Pass : public ScriptPass
 		log("    synth_xc2064 [options]\n");
 		log("\n");
 		log("This command runs synthesis for the XC2064 FPGA model (64 CLBs with two 3-input\n");
-		log("function generators F/G, which can be combined into one 4-input function, and one\n");
-		log("flip-flop fed from F).\n");
+		log("function generators F/G, which can be combined into one 4-input function or, with\n");
+		log("B selecting, into the FGM mux mode, and one flip-flop fed from F).\n");
 		log("\n");
 		log("    -top <module>\n");
 		log("        use the specified module as top module (default: auto-detect)\n");
@@ -115,6 +304,9 @@ struct SynthXc2064Pass : public ScriptPass
 		log("\n");
 		log("    -noiopad\n");
 		log("        do not insert XC2000_INBUF/OUTBUF/TOBUF/IOBUF cells for top-level ports\n");
+		log("\n");
+		log("    -nofgm\n");
+		log("        do not use the FGM mux mode (xc2064_fgm)\n");
 		log("\n");
 		log("    -run <from_label>:<to_label>\n");
 		log("        only run the commands between the labels (see below). an empty\n");
@@ -127,13 +319,14 @@ struct SynthXc2064Pass : public ScriptPass
 	}
 
 	std::string top_opt, json_file;
-	bool noiopad;
+	bool noiopad, nofgm;
 
 	void clear_flags() override
 	{
 		top_opt = "-auto-top";
 		json_file = "";
 		noiopad = false;
+		nofgm = false;
 	}
 
 	void execute(std::vector<std::string> args, RTLIL::Design *design) override
@@ -153,6 +346,10 @@ struct SynthXc2064Pass : public ScriptPass
 			}
 			if (args[argidx] == "-noiopad") {
 				noiopad = true;
+				continue;
+			}
+			if (args[argidx] == "-nofgm") {
+				nofgm = true;
 				continue;
 			}
 			if (args[argidx] == "-run" && argidx + 1 < args.size()) {
@@ -229,6 +426,9 @@ struct SynthXc2064Pass : public ScriptPass
 
 		if (check_label("map_cells")) {
 			run("techmap -map " + datdir + "/cells_map.v");
+			// Mux-Modus FGM: LUTs vor einem FF mit Rückführung von Q zu einer Funktion von 5 Signalen
+			if (!nofgm || help_mode)
+				run("xc2064_fgm", "(unless -nofgm)");
 			run("xc2064_ffbuf");
 			run("opt_clean");
 		}

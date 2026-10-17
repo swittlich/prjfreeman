@@ -45,8 +45,9 @@ enum ClbZ
 {
     Z_F = 0,  // LUT3: Funktion F von 3 Variablen
     Z_G = 1,  // LUT3: Funktion G von 3 Variablen
-    Z_FG = 2, // LUT4: F und G als eine Funktion von 4 Variablen
-    Z_FF = 3, // DFF: Flipflop oder Latch
+    Z_FG = 2,  // LUT4: F und G als eine Funktion von 4 Variablen
+    Z_FF = 3,  // DFF: Flipflop oder Latch
+    Z_FGM = 4, // FGM: F und G mit eigenen Eingängen, B wählt (Mux-Modus)
 };
 
 // Signalquellen innerhalb einer CLB (für die Zuordnung der Eingangsmultiplexer)
@@ -57,8 +58,8 @@ enum Src
     S_C,
     S_D,
     S_Q, // FF-Ausgang dieser CLB
-    S_F, // Ausgang F bzw. FG dieser CLB
-    S_G, // Ausgang G bzw. FG dieser CLB
+    S_F, // Ausgang F bzw. FG/FGM dieser CLB
+    S_G, // Ausgang G bzw. FG/FGM dieser CLB
     S_K, // Takteingang K (nur globale Taktnetze)
     S_COUNT
 };
@@ -69,7 +70,7 @@ constexpr uint8_t LUT_IN_OPTS[4] = {
         M(S_A) | M(S_B),          // Eingang 1 aus A oder B
         M(S_B) | M(S_C),          // Eingang 2 aus B oder C
         M(S_C) | M(S_D) | M(S_Q), // Eingang 3 aus C, D oder Q
-        M(S_B),                   // FG: B wählt zwischen F und G
+        M(S_B),                   // FG und FGM: B wählt zwischen F und G
 };
 
 constexpr uint8_t FF_CLK_OPTS = M(S_K) | M(S_C) | M(S_G);
@@ -350,11 +351,13 @@ struct Xc2064Impl : HimbaechelAPI
 
     // Konstanten: Der XC2064 hat keine Konstanten-Leitung. Ein konstanter LUT-Eingang geht in den LUT-Inhalt
     // (INIT hängt danach nicht mehr von ihm ab, sein Eingangs-Mux bleibt aus), Set/Reset = 0 heißt ohne
-    // Set/Reset. Was bleibt (konstanter Ausgang eines Pads, Set/Reset = 1, Takt, ...), treibt eine LUT mit
-    // konstantem Inhalt, je Wert eine; ein FF-Dateneingang bekommt eine eigene (D nur aus F/FG der CLB).
+    // Set/Reset, ein FGM mit festem S wird die gewählte Tabelle als LUT3. Was bleibt (konstanter Ausgang eines
+    // Pads, Set/Reset = 1, Takt, ...), treibt eine LUT mit konstantem Inhalt, je Wert eine; ein
+    // FF-Dateneingang bekommt eine eigene (D nur aus F/FG der CLB).
     void fold_constants()
     {
         int folded = 0, dropped = 0, luts = 0;
+        std::vector<std::pair<CellInfo *, int>> fixed_select; // FGM mit festem S
         std::vector<IdString> drivers;
         dict<int, NetInfo *> const_net; // 0/1 -> Netz der gemeinsamen Konstanten-LUT
         auto const_lut = [&](int value, IdString name) {
@@ -383,21 +386,19 @@ struct Xc2064Impl : HimbaechelAPI
                 users.push_back(u);
             for (auto &u : users) {
                 CellInfo *ci = u.cell;
-                int width = ci->type == id_XC2000_LUT3 ? 3 : ci->type == id_XC2000_LUT4 ? 4 : 0;
+                const Table *table = nullptr;
                 int idx = -1;
-                for (int i = 0; i < width; i++)
-                    if (u.port == lut_in(i))
-                        idx = i;
+                auto ts = tables(ci);
+                for (const Table &t : ts)
+                    for (int i = 0; i < t.width(); i++)
+                        if (u.port == t.ports[i])
+                            table = &t, idx = i;
                 ci->disconnectPort(u.port);
-                if (idx >= 0) { // LUT-Eingang: Inhalt für den festen Wert auf alle Adressen übertragen
-                    uint64_t old_init = uint64_t(ci->params.at(id_INIT).as_int64()), new_init = 0;
-                    for (int a = 0; a < (1 << width); a++) {
-                        int b = (a & ~(1 << idx)) | (value << idx);
-                        if ((old_init >> b) & 1)
-                            new_init |= uint64_t(1) << a;
-                    }
-                    ci->params[id_INIT] = Property(int64_t(new_init), 1 << width);
+                if (table) { // LUT-Eingang: Inhalt für den festen Wert auf alle Adressen übertragen
+                    set_init(ci, *table, fold_input(init_of(ci, *table), table->width(), idx, value));
                     folded++;
+                } else if (ci->type == id_XC2000_FGM && u.port == id_S) {
+                    fixed_select.push_back({ci, value});
                 } else if (ci->type == id_XC2000_DFF && u.port.in(id_S, id_R) && value == 0) {
                     dropped++;
                 } else if (ci->type == id_XC2000_DFF && u.port == id_D) {
@@ -416,9 +417,36 @@ struct Xc2064Impl : HimbaechelAPI
                     ctx->nets.erase(p.second.net->name);
             ctx->cells.erase(name);
         }
-        if (folded || dropped || luts)
-            log_info("Constants: %d LUT inputs folded into INIT, %d set/reset inputs dropped, %d constant LUTs.\n",
-                     folded, dropped, luts);
+        for (auto &fs : fixed_select)
+            fgm_to_lut3(fs.first, fs.second);
+        if (folded || dropped || luts || !fixed_select.empty())
+            log_info("Constants: %d LUT inputs folded into INIT, %d set/reset inputs dropped, %d constant LUTs, %d FGM "
+                     "with fixed select.\n",
+                     folded, dropped, luts, int(fixed_select.size()));
+    }
+
+    // FGM mit festem S: nur die gewählte Tabelle bleibt (S = 1: F, S = 0: G), als LUT3 mit deren Eingängen
+    void fgm_to_lut3(CellInfo *ci, int s)
+    {
+        int keep = s ? 0 : 1;
+        uint64_t init = uint64_t(ci->params.at(keep ? id_INIT_G : id_INIT_F).as_int64());
+        for (int h = 0; h < 2; h++)
+            for (int i = 0; i < 3; i++) {
+                IdString p = fgm_in(h, i);
+                NetInfo *net = ci->getPort(p);
+                ci->disconnectPort(p);
+                ci->ports.erase(p);
+                if (h == keep) {
+                    ci->addInput(lut_in(i));
+                    if (net)
+                        ci->connectPort(lut_in(i), net);
+                }
+            }
+        ci->ports.erase(id_S);
+        ci->params.erase(id_INIT_F);
+        ci->params.erase(id_INIT_G);
+        ci->params[id_INIT] = Property(int64_t(init), 8);
+        ci->type = id_XC2000_LUT3;
     }
 
     static std::string storage_elements(int n)
@@ -445,48 +473,44 @@ struct Xc2064Impl : HimbaechelAPI
             bind_clock_pads();
         int moved = route_q_feedback_to_i2();
         int unused = fold_unused_lut_inputs();
-        // Das FF bekommt seine Daten nur aus F bzw. FG derselben CLB. synth_xc2064 sorgt dafür, dass
+        // Das FF bekommt seine Daten nur aus F bzw. FG/FGM derselben CLB. synth_xc2064 sorgt dafür, dass
         // jedes FF einen eigenen LUT hat; LUT und FF werden hier als Cluster gemeinsam platziert.
         const pool<CellTypePort> ff_d{{id_XC2000_DFF, id_D}};
         int n3 = h.constrain_cell_pairs(pool<CellTypePort>{{id_XC2000_LUT3, id_O}}, ff_d, Z_FF - Z_F);
         int n4 = h.constrain_cell_pairs(pool<CellTypePort>{{id_XC2000_LUT4, id_O}}, ff_d, Z_FF - Z_FG);
-        log_info("Constrained %d LUT3/FF and %d LUT4/FF pairs, %d Q feedback inputs moved to I[2], %d unused LUT "
-                 "inputs made don't-care.\n",
-                 n3, n4, moved, unused);
+        int nm = h.constrain_cell_pairs(pool<CellTypePort>{{id_XC2000_FGM, id_O}}, ff_d, Z_FF - Z_FGM);
+        log_info("Constrained %d LUT3/FF, %d LUT4/FF and %d FGM/FF pairs, %d Q feedback inputs moved to input 3, "
+                 "%d unused LUT inputs made don't-care.\n",
+                 n3, n4, nm, moved, unused);
     }
 
     bool clkbuf_enabled() const { return clkbuf; }
 
     // Ein unbelegter LUT-Eingang liest im Chip trotzdem eine Leitung (die Grundstellung seines Muxes): der
     // LUT-Inhalt darf daher nicht von ihm abhängen. INIT übernimmt für beide Werte den Teil mit Eingang = 0.
+    // Beim FGM gilt das für jede der beiden Tabellen; S ist Pflicht (B wählt im Chip immer).
     int fold_unused_lut_inputs()
     {
         int n = 0;
         for (auto &cell : ctx->cells) {
             CellInfo *ci = cell.second.get();
-            int width = ci->type == id_XC2000_LUT3 ? 3 : ci->type == id_XC2000_LUT4 ? 4 : 0;
-            if (!width)
-                continue;
-            uint64_t init = uint64_t(ci->params.at(id_INIT).as_int64()), next = init;
-            for (int i = 0; i < width; i++) {
-                if (ci->getPort(lut_in(i)))
-                    continue;
-                uint64_t folded = 0;
-                for (int a = 0; a < (1 << width); a++)
-                    if ((next >> (a & ~(1 << i))) & 1)
-                        folded |= uint64_t(1) << a;
-                next = folded;
-                n++;
+            if (ci->type == id_XC2000_FGM && !ci->getPort(id_S))
+                log_error("%s: XC2000_FGM ohne S (B wählt zwischen F und G)\n", ctx->nameOf(ci));
+            for (const Table &t : tables(ci)) {
+                uint64_t init = init_of(ci, t), next = init;
+                for (int i = 0; i < t.width(); i++)
+                    if (!ci->getPort(t.ports[i]))
+                        next = fold_input(next, t.width(), i, 0), n++;
+                if (next != init)
+                    set_init(ci, t, next);
             }
-            if (next != init)
-                ci->params[id_INIT] = Property(int64_t(next), 1 << width);
         }
         return n;
     }
 
     bool isBelLocationValid(BelId bel, bool explain_invalid) const override
     {
-        if (!ctx->getBelType(bel).in(id_LUT3, id_LUT4, id_DFF))
+        if (!ctx->getBelType(bel).in(id_LUT3, id_LUT4, id_FGM, id_DFF))
             return true;
         Loc l = ctx->getBelLocation(bel);
         return clb_valid(l.x, l.y, explain_invalid);
@@ -500,6 +524,8 @@ struct Xc2064Impl : HimbaechelAPI
             return id_LUT3;
         case id_XC2000_LUT4.index:
             return id_LUT4;
+        case id_XC2000_FGM.index:
+            return id_FGM;
         case id_XC2000_DFF.index:
             return id_DFF;
         case id_XC2000_INBUF.index:
@@ -531,10 +557,52 @@ struct Xc2064Impl : HimbaechelAPI
     pool<PipId> pad_exit_pips;       // ... und die Pips von dort ins allgemeine Routing
 
     IdString lut_in(int i) const { return ctx->idf("I[%d]", i); }
+    IdString fgm_in(int half, int i) const { return ctx->idf("%c[%d]", "FG"[half], i); } // half 0: F, 1: G
+
+    // --- Funktionstabellen ---------------------------------------------------------------------
+    // LUT3 und LUT4 haben eine Tabelle (INIT mit den Eingängen I[...]), FGM zwei (INIT_F mit F[...], INIT_G
+    // mit G[...]); Bit a der Tabelle ist der Ausgang für die Eingänge a (Eingang i = Bit i)
+    struct Table
+    {
+        IdString param;
+        std::vector<IdString> ports;
+        int width() const { return int(ports.size()); }
+    };
+    std::vector<Table> tables(const CellInfo *ci) const
+    {
+        std::vector<Table> r;
+        if (ci->type.in(id_XC2000_LUT3, id_XC2000_LUT4)) {
+            r.push_back({id_INIT, {}});
+            for (int i = 0; i < (ci->type == id_XC2000_LUT4 ? 4 : 3); i++)
+                r.back().ports.push_back(lut_in(i));
+        } else if (ci->type == id_XC2000_FGM) {
+            for (int h = 0; h < 2; h++) {
+                r.push_back({h ? id_INIT_G : id_INIT_F, {}});
+                for (int i = 0; i < 3; i++)
+                    r.back().ports.push_back(fgm_in(h, i));
+            }
+        }
+        return r;
+    }
+    static uint64_t init_of(const CellInfo *ci, const Table &t) { return uint64_t(ci->params.at(t.param).as_int64()); }
+    static void set_init(CellInfo *ci, const Table &t, uint64_t v)
+    {
+        ci->params[t.param] = Property(int64_t(v), 1 << t.width());
+    }
+    // Tabelle mit Eingang idx fest auf value: für beide Werte des Eingangs derselbe Inhalt
+    static uint64_t fold_input(uint64_t init, int width, int idx, int value)
+    {
+        uint64_t r = 0;
+        for (int a = 0; a < (1 << width); a++)
+            if ((init >> ((a & ~(1 << idx)) | (value << idx))) & 1)
+                r |= uint64_t(1) << a;
+        return r;
+    }
 
     // --- Packing: Q-Rückführung --------------------------------------------------------------
-    // Nur Eingang 3 (I[2]) eines Funktionsgenerators kann Q direkt nutzen. Hängt am LUT, der ein FF
-    // speist, das Q dieses FFs an einem anderen Eingang, werden die Eingänge getauscht (INIT permutiert).
+    // Nur Eingang 3 (I[2], beim FGM F[2] bzw. G[2]) eines Funktionsgenerators kann Q direkt nutzen. Hängt an
+    // der Tabelle, die ein FF speist, das Q dieses FFs an einem anderen Eingang, werden die Eingänge getauscht
+    // (Inhalt permutiert).
     int route_q_feedback_to_i2()
     {
         int moved = 0;
@@ -543,26 +611,27 @@ struct Xc2064Impl : HimbaechelAPI
             if (ff->type != id_XC2000_DFF)
                 continue;
             NetInfo *d = ff->getPort(id_D), *q = ff->getPort(id_Q);
-            if (!d || !q || !d->driver.cell || !d->driver.cell->type.in(id_XC2000_LUT3, id_XC2000_LUT4))
+            if (!d || !q || !d->driver.cell)
                 continue;
             CellInfo *lut = d->driver.cell;
-            if (lut->getPort(lut_in(2)) == q)
-                continue;
-            int width = lut->type == id_XC2000_LUT4 ? 4 : 3;
-            for (int i = 0; i < width; i++) {
-                if (i == 2 || lut->getPort(lut_in(i)) != q)
+            for (const Table &t : tables(lut)) {
+                if (lut->getPort(t.ports.at(2)) == q)
                     continue;
-                swap_lut_inputs(lut, width, i, 2);
-                moved++;
-                break;
+                for (int i = 0; i < t.width(); i++) {
+                    if (i == 2 || lut->getPort(t.ports[i]) != q)
+                        continue;
+                    swap_lut_inputs(lut, t, i, 2);
+                    moved++;
+                    break;
+                }
             }
         }
         return moved;
     }
 
-    void swap_lut_inputs(CellInfo *lut, int width, int a, int b)
+    void swap_lut_inputs(CellInfo *lut, const Table &t, int a, int b)
     {
-        IdString pa = lut_in(a), pb = lut_in(b);
+        IdString pa = t.ports.at(a), pb = t.ports.at(b);
         for (IdString p : {pa, pb})
             if (!lut->ports.count(p))
                 lut->addInput(p);
@@ -573,15 +642,15 @@ struct Xc2064Impl : HimbaechelAPI
             lut->connectPort(pa, nb);
         if (na)
             lut->connectPort(pb, na);
-        // INIT: Bit i des neuen Inhalts = Bit (i mit vertauschten Adressbits a, b) des alten
-        uint64_t old_init = uint64_t(lut->params.at(id_INIT).as_int64()), new_init = 0;
-        for (int i = 0; i < (1 << width); i++) {
+        // Inhalt: Bit i des neuen = Bit (i mit vertauschten Adressbits a, b) des alten
+        uint64_t old_init = init_of(lut, t), new_init = 0;
+        for (int i = 0; i < (1 << t.width()); i++) {
             int j = i & ~((1 << a) | (1 << b));
             j |= (((i >> a) & 1) << b) | (((i >> b) & 1) << a);
             if ((old_init >> j) & 1)
                 new_init |= uint64_t(1) << i;
         }
-        lut->params[id_INIT] = Property(int64_t(new_init), 1 << width);
+        set_init(lut, t, new_init);
     }
 
     // --- Legalität ----------------------------------------------------------------------------
@@ -646,24 +715,27 @@ struct Xc2064Impl : HimbaechelAPI
     bool clb_valid(int x, int y, bool explain) const
     {
         const CellInfo *f = cell_at(x, y, Z_F), *g = cell_at(x, y, Z_G);
-        const CellInfo *fg = cell_at(x, y, Z_FG), *ff = cell_at(x, y, Z_FF);
+        const CellInfo *fg = cell_at(x, y, Z_FG), *fgm = cell_at(x, y, Z_FGM), *ff = cell_at(x, y, Z_FF);
 
-        // 1. Der F/G-Verbund (Funktion von 4 Variablen) belegt beide Funktionsgeneratoren
-        if (fg && (f || g)) {
+        // 1. Der F/G-Verbund (FG: Funktion von 4 Variablen, FGM: Mux-Modus) belegt beide Funktionsgeneratoren,
+        // sein Ausgang liegt an F und an G
+        const CellInfo *both = fg ? fg : fgm;
+        if (both && (f || g || (fg && fgm))) {
             if (explain)
-                log_info("X%dY%d: LUT4 (FG) und LUT3 (F/G) gleichzeitig belegt\n", x, y);
+                log_info("X%dY%d: %s und ein weiterer Funktionsgenerator gleichzeitig belegt\n", x, y,
+                         fg ? "LUT4 (FG)" : "FGM");
             return false;
         }
-        const NetInfo *f_out = f ? f->getPort(id_O) : fg ? fg->getPort(id_O) : nullptr;
-        const NetInfo *g_out = g ? g->getPort(id_O) : fg ? fg->getPort(id_O) : nullptr;
+        const NetInfo *f_out = f ? f->getPort(id_O) : both ? both->getPort(id_O) : nullptr;
+        const NetInfo *g_out = g ? g->getPort(id_O) : both ? both->getPort(id_O) : nullptr;
         const NetInfo *q_out = ff ? ff->getPort(id_Q) : nullptr;
 
-        // 2. Das FF bekommt seine Daten nur von F bzw. FG dieser CLB
+        // 2. Das FF bekommt seine Daten nur von F bzw. FG/FGM dieser CLB
         if (ff) {
             const NetInfo *d = ff->getPort(id_D);
             if (d && (!f_out || d != f_out)) {
                 if (explain)
-                    log_info("X%dY%d: FF-Daten kommen nicht aus F bzw. FG dieser CLB\n", x, y);
+                    log_info("X%dY%d: FF-Daten kommen nicht aus F bzw. FG/FGM dieser CLB\n", x, y);
                 return false;
             }
         }
@@ -690,6 +762,12 @@ struct Xc2064Impl : HimbaechelAPI
         if (fg)
             for (int i = 0; i < 4; i++)
                 add(fg->getPort(lut_in(i)), LUT_IN_OPTS[i]);
+        if (fgm) {
+            for (int h = 0; h < 2; h++)
+                for (int i = 0; i < 3; i++)
+                    add(fgm->getPort(fgm_in(h, i)), LUT_IN_OPTS[i]);
+            add(fgm->getPort(id_S), LUT_IN_OPTS[3]);
+        }
         if (ff) {
             add(ff->getPort(id_CLK), FF_CLK_OPTS);
             add(ff->getPort(id_S), FF_SET_OPTS);
@@ -811,24 +889,37 @@ struct Xc2064Impl : HimbaechelAPI
     std::string clb_config(int x, int y) const
     {
         const CellInfo *f = cell_at(x, y, Z_F), *g = cell_at(x, y, Z_G), *fg = cell_at(x, y, Z_FG);
-        const CellInfo *ff = cell_at(x, y, Z_FF);
+        const CellInfo *fgm = cell_at(x, y, Z_FGM), *ff = cell_at(x, y, Z_FF);
         Loc loc(x, y, 0);
         std::string xs = driver_name(tile_wire(loc, GFX_WIRE_X)), ys = driver_name(tile_wire(loc, GFX_WIRE_Y));
-        if (!f && !g && !fg && !ff && xs.empty() && ys.empty())
+        if (!f && !g && !fg && !fgm && !ff && xs.empty() && ys.empty())
             return "";
+        // FG/FGM liegt an F und an G (F/M bzw. G im Original)
         auto out_name = [](const std::string &s) { return s == "G_O" ? "G" : s == "Q" || s.empty() ? "Q" : "F"; };
-        auto inputs = [&](int z) {
+        auto inputs = [&](int z, int half) { // half -1: I[0..2] eines LUT, 0/1: F[...]/G[...] des FGM
             static const char *def[3] = {"B", "C", "Q"};
             std::string r;
             for (int i = 0; i < 3; i++) {
-                std::string s = pin_driver(x, y, z, lut_in(i));
+                std::string s = pin_driver(x, y, z, half < 0 ? lut_in(i) : fgm_in(half, i));
                 r += (i ? ":" : "") + (s.empty() ? std::string(def[i]) : s);
             }
             return r;
         };
-        auto init = [](const CellInfo *c) { return c ? uint64_t(c->params.at(id_INIT).as_int64()) : uint64_t(0); };
-        std::string fin = fg ? inputs(Z_FG) : inputs(Z_F), gin = fg ? fin : inputs(Z_G);
-        unsigned lutf = fg ? (init(fg) >> 8) & 0xFF : init(f) & 0xFF, lutg = fg ? init(fg) & 0xFF : init(g) & 0xFF;
+        auto init = [](const CellInfo *c, IdString p) {
+            return c ? unsigned(c->params.at(p).as_int64()) : 0u;
+        };
+        std::string base = "FG", fin, gin;
+        unsigned lutf, lutg;
+        if (fg) { // B = 1: Tabelle F = INIT[15:8]
+            base = "F", fin = gin = inputs(Z_FG, -1);
+            lutf = (init(fg, id_INIT) >> 8) & 0xFF, lutg = init(fg, id_INIT) & 0xFF;
+        } else if (fgm) {
+            base = "FGM", fin = inputs(Z_FGM, 0), gin = inputs(Z_FGM, 1);
+            lutf = init(fgm, id_INIT_F) & 0xFF, lutg = init(fgm, id_INIT_G) & 0xFF;
+        } else {
+            fin = inputs(Z_F, -1), gin = inputs(Z_G, -1);
+            lutf = init(f, id_INIT) & 0xFF, lutg = init(g, id_INIT) & 0xFF;
+        }
         std::string q = "LATCH", clk, set, res;
         if (ff) {
             auto param = [&](const char *p) {
@@ -843,7 +934,7 @@ struct Xc2064Impl : HimbaechelAPI
             set = s.empty() ? "" : s == "A" ? "A" : "F";
             res = r.empty() ? "" : r == "D" ? "D" : "G";
         }
-        return stringf("BASE:%s F:%s G:%s LUTF:%02X LUTG:%02X X:%s Y:%s Q:%s SET:%s RES:%s CLK:%s", fg ? "F" : "FG",
+        return stringf("BASE:%s F:%s G:%s LUTF:%02X LUTG:%02X X:%s Y:%s Q:%s SET:%s RES:%s CLK:%s", base.c_str(),
                        fin.c_str(), gin.c_str(), lutf, lutg, out_name(xs), out_name(ys), q.c_str(), set.c_str(),
                        res.c_str(), clk.c_str());
     }
@@ -911,7 +1002,7 @@ struct Xc2064Impl : HimbaechelAPI
     // CLB (Rahmen 0.37..0.95) nach dem Blockschaltbild im Datenblatt, von links nach rechts:
     //   Eingänge A B C D als Zeilen von links (A vom Kanal oben, D vom Kanal unten), Rückführung Q
     //   kombinatorische Logik: Multiplexer der LUT-Eingänge, LUT F, LUT G, FG als Rahmen um beide mit dem
-    //   F/G-Multiplexer (B wählt)
+    //   F/G-Multiplexer (B wählt), FGM (Mux-Modus) als derselbe Multiplexer ohne Rahmen
     //   Verteiler F, FG, G mit den Multiplexern für Set (oben), Daten, Takt und Reset (unten)
     //   Speicherelement: D und Takt links, S oben, R unten, Q rechts
     //   Ausgangsschienen mit den Multiplexern X und Y, beide rechts hinaus durch den Kanal rechts
@@ -1658,12 +1749,14 @@ struct Xc2064Impl : HimbaechelAPI
             box(g, style, x + BOX_X0, y + top, x + BOX_X1, y + top + LUT_H);
             break;
         }
-        case id_LUT4.index: { // FG: F und G mit dem F/G-Multiplexer (B wählt) in einem Rahmen
+        case id_LUT4.index:  // FG: F und G mit dem F/G-Multiplexer (B wählt) in einem Rahmen (eine Funktion)
+        case id_FGM.index: { // FGM: dieselben Teile ohne Rahmen (zwei Funktionen mit eigenen Eingängen, B wählt)
             float fy = source_point(GFX_WIRE_F_O).second, gy = source_point(GFX_WIRE_G_O).second;
             box(g, style, x + BOX_X0, y + F_TOP, x + BOX_X1, y + F_TOP + LUT_H);
             box(g, style, x + BOX_X0, y + G_TOP, x + BOX_X1, y + G_TOP + LUT_H);
-            poly(g, style, loc,
-                 {{FGF_X0, FGF_Y0}, {FGF_X1, FGF_Y0}, {FGF_X1, FGF_Y1}, {FGF_X0, FGF_Y1}, {FGF_X0, FGF_Y0}});
+            if (bel_type == id_LUT4)
+                poly(g, style, loc,
+                     {{FGF_X0, FGF_Y0}, {FGF_X1, FGF_Y0}, {FGF_X1, FGF_Y1}, {FGF_X0, FGF_Y1}, {FGF_X0, FGF_Y0}});
             draw_mux(g, style, loc, M_X0, M_Y0, M_X1, M_Y1);
             poly(g, style, loc, {{BOX_X1, fy}, {TAP_X, fy}, {TAP_X, M_IN_F}, {M_X0, M_IN_F}});
             poly(g, style, loc, {{BOX_X1, gy}, {TAP_X, gy}, {TAP_X, M_IN_G}, {M_X0, M_IN_G}});

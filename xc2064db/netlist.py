@@ -3,8 +3,9 @@
 Netze sind die Knoten des Routing-Graphen, die die programmierten Verbindungen zusammenschalten (Puffer an den
 Sektionsgrenzen verbinden immer). Treiber sind X/Y der CLBs und die Eingänge der Pads (Pnn.I), Senken die
 CLB-Eingänge und die Ausgangs- und T-Muxe der Pads. Aus jeder CLB entstehen die Zellen, die ihre Konfiguration
-beschreibt (blocks.py): Funktionsgeneratoren als XC2000_LUT3 (F, G) bzw. XC2000_LUT4 (BASE F, B wählt),
-das Speicherelement als XC2000_DFF, wenn sein Takt eingeschaltet ist. Pads werden IO-Puffer nach dem Modus
+beschreibt (blocks.py): Funktionsgeneratoren als XC2000_LUT3 (F, G), XC2000_LUT4 (BASE F, B wählt) bzw.
+XC2000_FGM (BASE FGM, B wählt zwischen F und G mit eigenen Eingängen), das Speicherelement als XC2000_DFF, wenn
+sein Takt eingeschaltet ist. Pads werden IO-Puffer nach dem Modus
 des T-Muxes (aus: INBUF, an: OUTBUF, sonst TOBUF bzw. IOBUF).
 
 Der Bitstream kennt keine Namen: Ports (Pad -> Name, Richtung) und Register (CLB -> Name des Q-Netzes) kommen
@@ -109,14 +110,19 @@ def build(db, raw, ports, regs, g=None):
             cells.append(("XC2000_LUT4", "%s.LUTFG" % t, {"INIT": "16'b{:016b}".format(init)},
                           {"I": [pin(p) for p in ins], "O": o}))
             out["F"] = out["G"] = o
+        elif base == "FGM" and need:  # Mux-Modus: F und G mit eigenen Eingängen, B wählt (B = 1: F), Ausgang M
+            o = "%s.M" % t
+            cells.append(("XC2000_FGM", "%s.FGM" % t, {"INIT_F": "8'b{:08b}".format(int(f["LUTF"], 16)),
+                                                       "INIT_G": "8'b{:08b}".format(int(f["LUTG"], 16))},
+                          {"F": [pin(p) for p in f["F"].split(":")], "G": [pin(p) for p in f["G"].split(":")],
+                           "S": pin("B"), "O": o}))
+            out["F"] = out["G"] = o
         else:
             for lut in sorted(need):
                 o = "%s.%s" % (t, lut)
                 cells.append(("XC2000_LUT3", "%s.LUT%s" % (t, lut), {"INIT": "8'b{:08b}".format(int(f["LUT" + lut], 16))},
                               {"I": [pin(p) for p in f[lut].split(":")], "O": o}))
                 out[lut] = o
-            if base == "FGM" and need:  # B wählt zwischen F und G (M)
-                raise ValueError("%s: BASE FGM wird nicht nachgebildet" % t)
         if has_ff:
             c = pin(clk[0]) if clk[0] in ("K", "C") else out["G"]
             conns = {"CLK": c, "D": out["F"], "Q": q}

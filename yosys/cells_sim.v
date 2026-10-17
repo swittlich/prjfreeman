@@ -13,7 +13,7 @@ module XC2000_LUT3 #(
 	assign O = INIT[I];
 endmodule
 
-// F und G gemeinsam: Funktion von 4 Variablen (I[3] wählt zwischen G = INIT[15:8] und F = INIT[7:0])
+// F und G gemeinsam: Funktion von 4 Variablen (I[3] = B wählt zwischen F = INIT[15:8] und G = INIT[7:0])
 module XC2000_LUT4 #(
 	parameter [15:0] INIT = 16'h0000
 ) (
@@ -21,6 +21,20 @@ module XC2000_LUT4 #(
 	output       O
 );
 	assign O = INIT[I];
+endmodule
+
+// Mux-Modus FGM: F und G mit eigenen Eingängen, S (= B) wählt zwischen F (S = 1) und G (S = 0). Lohnt sich nur
+// mit der Rückführung Q: F liest dann D, G das eigene Q (bzw. umgekehrt), eine Funktion von 5 Variablen.
+module XC2000_FGM #(
+	parameter [7:0] INIT_F = 8'h00,
+	parameter [7:0] INIT_G = 8'h00
+) (
+	input  [2:0] F,
+	input  [2:0] G,
+	input        S,
+	output       O
+);
+	assign O = S ? INIT_F[F] : INIT_G[G];
 endmodule
 
 // Das Speicherelement der CLB: Flipflop (LATCH=0) oder Latch (LATCH=1), Takt invertierbar (CLKINV),

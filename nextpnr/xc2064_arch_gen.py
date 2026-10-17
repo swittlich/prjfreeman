@@ -15,6 +15,7 @@
 #     Eingänge A, B, C, D, Takt K; Ausgänge X, Y
 #     F, G  : je eine Funktion von 3 Variablen; Eingang 1 aus {A, B}, 2 aus {B, C}, 3 aus {C, D, Q}
 #     FG    : F und G gemeinsam als eine Funktion von 4 Variablen, B wählt zwischen ihnen
+#     FGM   : dasselbe mit verschiedenen Eingängen von F und G (Mux-Modus, Data Book "Option 3")
 #     FF    : Flipflop oder Latch; Daten aus F (bzw. FG); Takt aus K, C oder G (invertierbar);
 #             asynchrones Set aus A oder F, asynchrones Reset aus D oder G
 #     X, Y  : je aus Q, F oder G
@@ -287,6 +288,11 @@ class Builder:
             self.wire(xy, "%s_O" % name, "LUT_OUT")
             pins.append(("O", "%s_O" % name, PinType.OUTPUT))
             bels.append((name, "LUT%d" % n, z, pins))
+        # FGM (Mux-Modus): F und G mit eigenen Eingängen, B wählt. Dieselbe Hardware wie FG, nur stehen die
+        # Eingangs-Muxe von F und G verschieden; der Bel nutzt daher die Leitungen von F, G und FG.
+        bels.append(("FGM", "FGM", 4, [("%s[%d]" % (h, i), "%s_I%d" % (h, i), PinType.INPUT)
+                                       for h in "FG" for i in range(3)]
+                     + [("S", "FG_I3", PinType.INPUT), ("O", "FG_O", PinType.OUTPUT)]))
         for w in ("FF_D", "FF_CLK", "FF_S", "FF_R"):
             self.wire(xy, w, "FF_IN")
         for s, d in (("F_O", "FF_D"), ("FG_O", "FF_D"),
@@ -405,10 +411,12 @@ def set_timings(ch: Chip):
         for name, cap in (("SEG", C_SEG), ("LONG", C_LONG), ("CLKNET", 0)):
             tmg.set_node_class(grade=speed, name=name, delay=TimingValue(0), res=TimingValue(0),
                                cap=TimingValue(cap))
-        for cell, n in (("XC2000_LUT3", 3), ("XC2000_LUT4", 4)):  # T_ILO hängt nicht von der Funktion ab
-            lut = ch.timing.add_cell_variant(speed, cell)
-            for i in range(n):
-                lut.add_comb_arc(f"I[{i}]", "O", tv(c["lut"]))
+        for cell, ins in (("XC2000_LUT3", ["I[%d]" % i for i in range(3)]),
+                          ("XC2000_LUT4", ["I[%d]" % i for i in range(4)]),
+                          ("XC2000_FGM", ["%s[%d]" % (h, i) for h in "FG" for i in range(3)] + ["S"])):
+            lut = ch.timing.add_cell_variant(speed, cell)  # T_ILO hängt nicht von der Funktion ab
+            for i in ins:
+                lut.add_comb_arc(i, "O", tv(c["lut"]))
         dff = ch.timing.add_cell_variant(speed, "XC2000_DFF")
         dff.add_setup_hold("CLK", "D", ClockEdge.RISING, tv(c["setup"]), TimingValue(0))
         dff.add_clock_out("CLK", "Q", ClockEdge.RISING, tv(c["ckq"]))

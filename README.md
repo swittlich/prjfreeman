@@ -36,6 +36,7 @@ git submodule update --init arch/xc2064/shirriff-xc2064 arch/xc2064/openxc2064
 | Fünfte senkrechte Leitung | Läuft an keiner Matrix vorbei. Ihr Stück der Zeile R beginnt an einem Verbindungspunkt oben im Kanal (`row.R.local.0`), kreuzt dort local.3/4 auf der Spur von local.6, knickt auf die Spur von local.5, läuft an der CLB vorbei (B, C, Y) und kreuzt im Kanal darunter noch local.0, local.3 und local.4 | Datenblatt Bild 7b (gestrichelt); belegt durch Netz `p1` in `TEST1.LCA` |
 | Funktionsgeneratoren | `F`, `G` (Primitiv `XC2000_LUT3`): Eingang 1 aus {A, B}, Eingang 2 aus {B, C}, Eingang 3 aus {C, D, **Q**} | `clb.js` |
 | 4-Variablen-Modus | `FG` (`XC2000_LUT4`): Eingänge wie F/G, **B** wählt zwischen F und G (I[3]), belegt beide | `clb.js` |
+| Mux-Modus | `FGM` (`XC2000_FGM`): F und G mit **eigenen** Eingängen (`F[2:0]`, `G[2:0]`), **B** (`S`) wählt (1: F), der Ausgang M liegt an F und G. In den Bits derselbe Modus wie FG, nur stehen die Eingangs-Muxe von F und G verschieden. Er lohnt sich nur mit der Rückführung Q: F liest D, G das eigene Q (oder umgekehrt), also eine Funktion von 5 Signalen `S ? f(a, c, x) : g(a, c, Q)`. Der Pass `xc2064_fgm` bildet sie aus LUTs vor einem FF | Data Book 1993, *CLB Combinatorial Logic Options* (S. 2-182/2-183, „Option 3“, „D und Q nie in derselben Funktion“); `clb.js`; `TEST1.LCA` (CLB AA, dort ohne benutzte Ausgänge) |
 | Speicherelement | `XC2000_DFF`: Flipflop oder **Latch** (`LATCH`), Takt aus **K, C oder G**, **invertierbar** (`CLKINV`), asynchrones **Set aus A oder F**, **Reset aus D oder G**, Daten aus F bzw. FG | `clb.js`; Vorrang Reset vor Set angenommen |
 | Ausgänge | X, Y je aus Q, F oder G, beide in den senkrechten Kanal **rechts** der CLB: X (Zeile io6) auf local.2, local.4 und long.1, Y (Zeile y) auf local.1, local.3, local.5 und long.2. In Spalte H liegen die Kreuzungen im Randkanal: X (auf Höhe der Zeile b) auf local.2, local.4 und long.2, Y auf local.1, local.3, long.1 und long.3 | PIP-Bits der Bitkarte |
 | CLB-Eingänge | Alle Quellen aus `clb.js` mit ihren Mux-Codes: A 6–7 (Kanal oben, long.1, X von oben), B 10 (local.1-5, Y von links, long.1/2, GCLK, X von oben), C 8 (local.1-5, long.1/2, X von unten), D 6–7 (Kanal unten, long.1, X von unten), K 2 (long.2, GCLK); am Rand andere Leitungen und Pads | `clb.js`; mit allen XACT-Bitstreams und `TEST1.RBT` geprüft |
@@ -47,8 +48,7 @@ git submodule update --init arch/xc2064/shirriff-xc2064 arch/xc2064/openxc2064
 | IOBs | **58 Pads mit PLCC68-Namen** (Bel `P9` usw.), je Pad-Kachel bis zu zwei. Alle Verbindungen aus `iob.js`, an den Leitungen **beider Kanäle** am Pad (parallel und senkrecht zum Rand): Ausgang zum Pad (Bel-Pin I, im Datenblatt „O“) über einen Multiplexer mit Mux-Code aus 6–9 Quellen (Einzelsegmente, Long Lines, X/Y der Rand-CLB, an P9 GCLK, an P43 ACLK). Tristate T (1 schaltet den Treiber ab) über einen Multiplexer aus 2 Einzelsegmenten und 2 Long Lines des Kanals parallel zum Rand. Eingang vom Pad (Bel-Pin O) über PIP-Bits auf 5–7 Leitungen und fest auf Eingänge der Rand-CLB. Der Modus des Ausgangstreibers ist Konfiguration (Code des T-Multiplexers), kein Pip: an (`XC2000_OUTBUF`), aus (`XC2000_INBUF`) oder Tristate (`XC2000_TOBUF`, `XC2000_IOBUF`, T geroutet). Direktverbindungen: rechts nehmen beide Pads X und Y einer CLB der Spalte H (das erste die daneben, das zweite die darüber); oben treibt das erste Pad A und B, das zweite nimmt X der CLB links; unten treibt das erste Pad C und D, das zweite nimmt X; links treibt das zweite Pad B der CLB darüber, P24 B der CLB HA. Das IOB oben verhält sich damit wie eine CLB darüber, das unten wie eine darunter | `iob.js`; Datenblatt, Abschnitte *I/O Block* und *Direct Interconnect*. Gelatchte Ein-/Ausgänge nicht modelliert. 8 Kreuzungen in `iob.js` ohne PIP-Bit (`col.A.io2` an P9 und den zweiten Pads links) und der Eingang von P43 in den ACLK-Puffer (`@aclk_in`) fehlen |
 | Timing | Geschwindigkeitsstufen über den Gerätenamen: `XC2064-50`, `-70`, `-100`, `-130` (ohne Zusatz -70; die Zahl ist die Umlaufrate eines FF in MHz). CLB und IOB nach den Tabellen des Data Books, bei -70: T_ILO 10 ns (Eingang bis Ausgang, im Modell 6 ns Funktion = T_QLO plus 4 ns Ausgangstreiber), T_CKO 10 ns (6 ns Clock-to-Q plus Treiber), T_ICK 7 ns (Setup an D also 1 ns), Takt über C 3 ns und über G 4 ns später als über K (aus T_CCO, T_CIO), Pad bis Eingang T_PID 6 ns, Ausgang bis Pad T_OP 9 ns, T bis Pad 15 ns. Interconnect als RC-Kette: jeder Schalter (Switch-Matrix, PIP, Eingangs-Mux) ist ein Widerstand vor der Kapazität der Leitung dahinter, die Kette beginnt an jedem Treiber neu (CLB-Ausgang, Taktpuffer); bei -70 kostet ein Einzelsegment hinter einem Schalter etwa 0,5 ns, eine Long Line 4 ns, der Taktpuffer 4 ns, die anderen Stufen im Verhältnis von T_ILO | Xilinx *Programmable Logic Data Book*, XC2000 *CLB Switching Characteristic Guidelines* und *IOB Switching Guidelines*: -50 (die einzige Stufe im PD48) aus dem von 1993 (S. 2-213, 2-214), -130 aus dem von 1994 (S. 2-221, 2-222), -70 und -100 stehen in beiden gleich. Bei -50: T_ILO 15, T_QLO 8, T_CKO 15, T_ICK 9, T_CCO 19, T_CIO 27, T_PID 8, T_OP 12, T_THZ/T_TON 20 ns. Für das Interconnect nennt das Buch keine Zahlen, nur das RC-Modell (*Interconnect Performance*): R, C und der Taktpuffer sind Schätzungen. Die Repowering-Puffer beenden die RC-Kette im Original, im Modell nicht (eher zu langsam). Set/Reset und das transparente Latch haben keine eigenen Bögen |
 
-Nicht modelliert: der Mux-Modus „FGM“ (zwei unabhängige 3-Variablen-Funktionen, B wählt) und
-gelatchte IOBs.
+Nicht modelliert: gelatchte IOBs.
 
 ### Regeln in `nextpnr/xc2064.cc`
 
@@ -96,7 +96,13 @@ yosys (`yosys/synth_xc2064.cc`):
   verschwindet er ganz.
 - `abc -lut 3:4` bewertet einen LUT4 mit den Kosten zweier LUT3.
 - `dfflegalize` erlaubt FF und Latch mit beiden Taktpolaritäten und asynchronem Set/Reset.
-- Der Pass `xc2064_ffbuf` gibt jedem FF einen eigenen treibenden LUT.
+- Der Pass `xc2064_fgm` (nach dem LUT-Mapping, abschaltbar mit `synth_xc2064 -nofgm`) fasst den LUT vor
+  einem Speicherelement mit LUTs davor zusammen, die nur ihn speisen, wenn das Ganze eine Funktion von
+  genau 5 Signalen ist, darunter das eigene Q, und die Form `S ? f(a, c, x) : g(a, c, Q)` hat (oder F und
+  G vertauscht). Dann wird daraus ein `XC2000_FGM`: S an B, a und c an Eingang 1 und 2 beider Tabellen, x
+  bzw. Q an Eingang 3. Mit weniger Signalen reicht ein LUT4, ohne Q bringt FGM nichts. Bisher prüft der
+  Pass nur LUTs direkt vor dem D-LUT (eine Ebene)
+- Der Pass `xc2064_ffbuf` gibt jedem FF einen eigenen treibenden LUT (bzw. FGM).
 - Die eigenen Zelltypen stehen nicht in yosys' `kernel/constids.inc`. `ID(...)` geht dafür bei
   aktuellem yosys (Twine-IdStrings) nicht, der Pass legt sie mit `design->twines().add(...)` an.
 
@@ -112,7 +118,8 @@ Iterationen. Mit dem Graphen aus den Daten (5 senkrechte Einzelsegmente, das ech
 10 Quellen je Eingang) routen alle 42 Läufe, der längste braucht 593 Iterationen, der ganze Test 54 s
 statt 11,5 min. Mit den IOBs aus `iob.js` (Stufe 3, Pads an beiden Kanälen) braucht der längste Lauf
 80 Iterationen, mit dem Timing aus Stufe 4 117. Die Spalte *Routing* des Tests zeigt das. Mit dem
-Rundlauf über den Bitstream (Stufe 5) dauert der ganze Test etwa 4 min.
+Rundlauf über den Bitstream (Stufe 5) dauert der ganze Test etwa 4 min, mit `shiftreg.v` (Stufe 6, 56
+Läufe) gut 6 min.
 
 ## Ablauf
 
@@ -151,6 +158,7 @@ etwa `--device XC2064-50` für den XC2064-PD48 (ohne Zusatz -70).
 | `examples/blinky.v` | 16-Bit-Zähler, Pins in `blinky.pcf` (Takt an P9, alles am oberen Rand) | 20 LUT3, 7 LUT4, 16 FF, bei -70 je nach Seed 14,0–14,6 MHz (Standard-Seed 14,4 MHz, `flow.sh --seed 1` oder `SEED=1 arch/xc2064/flow.sh` 14,5 MHz), bei -50 9,7 MHz (im PD48 9,6 MHz). Ohne PCF (`PCF=/dev/null`) je nach Seed 13,8–14,4 MHz. Die Werte verschieben sich mit jeder Änderung an Routing-Graph und Timing. Der kritische Pfad sind die LUT-Ebenen der Zähler-Logik, eine Carry-Kette hatte erst der XC4000 |
 | `examples/latch_sr.v` | FF mit fallender Flanke, FF mit asynchronem Set/Reset, Latch, Pins in `latch_sr.pcf` | 3 Speicherelemente mit `CLKINV`, `S`/`R` bzw. `LATCH`. Mit `--vopt clkbuf` und ohne PCF kommt `clk` an P9 und das Latch-Enable `en` an P43 |
 | `examples/tristate.v` | 4-Bit-Bus (`inout`) mit Low-aktivem `oe_n`, Tristate-Ausgang `tout` mit `en_n`, Pins in `tristate.pcf` (alles am oberen Rand) | 4 `XC2000_IOBUF`, 1 `XC2000_TOBUF`, 7 LUT3, 1 LUT4, 8 FF, bei -70 je nach Seed 53–57 MHz (-50: 39 MHz). T aller Bus-Bits hängt ohne Logik am Pad von `oe_n` und läuft über eine Long Line des oberen Randkanals (die T-Quellen dort: 2 Einzelsegmente und 2 Long Lines). Mit High-aktivem Enable (Inverter in einer CLB, deren Ausgänge die waagerechten Long Lines nicht erreichen, also nur über die Spuren zu den T) war der Bus dort nicht routbar |
+| `examples/shiftreg.v` | 8-Bit-Schieberegister mit parallelem Laden (`load`, `din`) und Enable (`en`, `sin`), Pins in `shiftreg.pcf` (Steuerung und `din` oben, `q` rechts) | 8 `XC2000_FGM`, 8 FF in 8 CLBs: jedes Bit ist `load ? din[i] : (en ? q[i-1] : q[i])`, F liest `din[i]` an D, G `en`, `q[i-1]` und das eigene Q, B = `load` wählt. Bei -70 je nach Seed 54,6–57,1 MHz. Mit `synth_xc2064 -nofgm` 9 LUT3 und 7 LUT4 in 16 CLBs, 35,1 MHz (Standard-Seed mit PCF) |
 
 In VS Code laufen die allgemeinen Tasks *Arch: Flow ausführen* und *Arch: Flow mit nextpnr-GUI* sowie
 die Debug-Konfigurationen für Architekturen (Run and Debug). Als Namen jeweils `xc2064` eingeben.
@@ -158,7 +166,9 @@ die Debug-Konfigurationen für Architekturen (Run and Debug). Als Namen jeweils 
 ### Regressionstest
 
 `test/run.sh [design.v …]` synthetisiert jedes Beispiel (ohne Argument alle `examples/*.v`), routet es
-mit dem nextpnr-Standard-Seed und den Seeds 1–6, mit und ohne PCF, und prüft jeden Lauf:
+mit dem nextpnr-Standard-Seed und den Seeds 1–6, mit und ohne PCF, und prüft jeden Lauf. Zeilen
+`// erwartet: <Zelltyp> <Anzahl>` im Design prüfen schon die Synthese (`shiftreg.v` verlangt 8
+`XC2000_FGM`, fällt der Pass aus, schlägt der Test fehl):
 
 | Spalte | Prüfung |
 |---|---|
@@ -235,7 +245,7 @@ Eine CLB (grauer Rahmen) folgt dem Blockschaltbild im Datenblatt, von links nach
 | Spalte | Inhalt |
 |---|---|
 | Eingänge | A, B, C, D als Zeilen von links. A kommt vom Kanal oben, D vom Kanal unten, B und C vom Kanal links |
-| Kombinatorische Logik | Schienen Q, D, C, B, A, die Multiplexer der LUT-Eingänge, LUT F, LUT G und FG als Rahmen um beide mit dem F/G-Multiplexer (B wählt) |
+| Kombinatorische Logik | Schienen Q, D, C, B, A, die Multiplexer der LUT-Eingänge, LUT F, LUT G und FG als Rahmen um beide mit dem F/G-Multiplexer (B wählt); FGM ist derselbe Multiplexer ohne Rahmen |
 | Verteiler | F, FG, G mit den Multiplexern für Set (oben), Daten, Takt und Reset (unten) |
 | Speicherelement | D und Takt (Dreieck) links, S oben, R unten, Q rechts |
 | Ausgänge | Schienen F, FG, G, Q mit den Multiplexern X und Y, beide rechts hinaus durch den Kanal (PIP-Kästchen an ihren Spuren und Long Lines) |
@@ -249,7 +259,9 @@ den Kreuzungen, an denen es geschaltet werden kann, auch die Direktleitungen und
 Pads. Der Pip ist dort nur das Kästchen, wie Metall und Schalter im Chip. Markiert man ein Wire,
 leuchtet also die ganze Leitung. In der CLB sind Pips ein Abgriff mit Punkt an der Schiene. Ein
 benutzter Pip zeigt zusätzlich seinen Weg durch den Multiplexer. Im FG-Modus leuchten die Multiplexer
-von F und G, der Rahmen und der F/G-Multiplexer.
+von F und G, der Rahmen und der F/G-Multiplexer. Im Mux-Modus FGM leuchten F, G und der F/G-Multiplexer
+ohne den Rahmen (zwei Funktionen), und an F und G jeweils nur die Eingangs-Multiplexer, die ihre
+Tabelle braucht.
 
 Weil nextpnr selbst mit y nach oben zeichnet, spiegelt `xc2064.cc` die Grafik. Weil nextpnr `drawPip`
 den kanonischen Draht eines Knotens übergibt (der in einer Nachbarkachel liegen kann), sucht
@@ -299,7 +311,7 @@ Generator der Chipdb (Namen und Verbindungen) und die Bitstream-Werkzeuge (Bitka
 | `bitstream` | `.BIT` und `.RBT` lesen und schreiben |
 | `blocks` | Konfiguration der CLBs (LUTs, Eingangsauswahl, FF/Latch, Takt, Set/Reset, X/Y), der IOBs (Eingang direkt/gelatcht) und der Optionen: Bits ↔ Felder, Grundzustand von XACT |
 | `config` | Textformat der Konfiguration: Bits → Text (`decode`), Text → Bits (`encode`) |
-| `netlist` | Netzliste aus einem Bitstream (Rückweg für den formalen Vergleich) |
+| `netlist` | Netzliste aus einem Bitstream (Rückweg für den formalen Vergleich), Funktionsgeneratoren als `XC2000_LUT3`, `XC2000_LUT4` (BASE F) bzw. `XC2000_FGM` (BASE FGM) |
 | `packages` | Gehäuse PC68 und PD48: Pin → Pad |
 | `graph` | Routing-Graph: Segmente aus den Trennstellen an den Matrizen und dem Modell der fünften Leitung, Verbindungen aus PIP-, Magic- und Mux-Bits. Der Generator `nextpnr/xc2064_arch_gen.py` baut daraus die Kacheln, `xc2064unpack` prüft daran die Bitstreams |
 | `lca` | `TEST1.LCA` von XACT lesen und gegen Dekodierung und Graph prüfen |
@@ -391,8 +403,9 @@ arch/xc2064/test/bitstreams.sh                                   # alles für al
 
 ## Ausbaustufen
 
-- **Mux-Modus FGM** (B wählt zwischen zwei unabhängigen 3-Variablen-Funktionen) als eigener Bel-Modus.
 - **Gelatchte IOB-Eingänge** mit den vier IOB-Taktmultiplexern (`iob.js`).
+- **FGM tiefer suchen**: `xc2064_fgm` fasst bisher nur den D-LUT mit LUTs direkt davor zusammen. Schnitte
+  über mehrere Ebenen (oder FGM schon vor `abc`) fänden mehr Fälle.
 - **Echter Bitstream**: [`XC2064-def.txt`](https://github.com/shirriff/xc2064) beschreibt alle 11.360
   Konfigurationsbits (LUT-Inhalte, IOB-Optionen, PIPs, Switch-Matrizen). Für ladbare Bitstreams müssen
   die PIPs des Modells genau den PIPs des Originals entsprechen. Dafür entsteht der Routing-Graph aus
@@ -435,6 +448,10 @@ arch/xc2064/test/bitstreams.sh                                   # alles für al
      `xc2064netlist` und der Rundlauf im Regressionstest (Text → RBT → zurück → Netzliste → formaler
      Vergleich, 42 von 42), Gehäuse PD48. Weil der Code der Taktpuffer-Eingänge unbekannt ist, routet
      nextpnr Takte ohne sie (`--vopt clkbuf` schaltet sie zu)
+  6. erledigt: Mux-Modus FGM: Primitiv `XC2000_FGM`, Bel `FGM` auf den Leitungen von F, G und FG,
+     `pack()` und Legalität (beide Tabellen mit eigenen Eingängen, Q an Eingang 3, festes S wird LUT3),
+     `--vopt out=` mit `BASE:FGM`, `xc2064netlist`, der yosys-Pass `xc2064_fgm` und das Beispiel
+     `shiftreg.v` (8 FGM statt 9 LUT3 und 7 LUT4, 8 statt 16 CLBs)
 
   Offen auf dem Weg zum geladenen Chip (beides braucht einen echten XC2064): der erste Versuch mit dem
   STM32-Lader (D/P-Pin) und die Codes von `CLK.AA.I`/`CLK.II.I`.
