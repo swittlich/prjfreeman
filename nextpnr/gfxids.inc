@@ -68,8 +68,6 @@ X(HL2_D)
 X(HL3_D)
 X(GCLK)
 X(ACLK)
-X(GCLK_SRC)
-X(ACLK_SRC)
 // IOBs: Pins (I, O, T wie die Bel-Pins) und X/Y der Rand-CLB im Ausgangs-Mux
 X(IO0_I)
 X(IO0_O)

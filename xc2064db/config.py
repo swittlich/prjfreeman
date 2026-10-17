@@ -8,13 +8,14 @@ Eine Zeile je Eintrag, Namen wie bei Shirriff, '#' leitet einen Kommentar ein:
     mux P59.T col.I.long.2          Tristate-Mux eines IOB: Quelle (Tristate), on (immer aktiv) oder off
     pip col.B.local.1:row.C.local.3 einzelnes PIP-Bit, Kreuzung einer col- mit einer row-Leitung
     switch BC.8.1 1-3               Verbindung zweier Pins einer Switch-Matrix (Magic-Bit)
-    bidi 125G6                      Bidi-Bit (Bedeutung offen, daher die G-Koordinate)
+    bidi 125G6 right                Repowering-Puffer (Name = Lage bei Shirriff) und seine Richtung: down/right
+                                    (Bit programmiert) oder up/left (Grundzustand, nicht aufgeführt)
     bit CLB AB Logic Table: 2 Bit: 0
                                     jedes andere programmierte Bit mit seinem Namen aus XC2064-def.txt
                                     (LUT, FF, X/Y, IOB-Muxe und -Optionen, Taktpuffer, Other)
 
-Dekodiert sind die CLB-Eingänge, die O- und T-Muxe der IOBs (mit Modus), Pips, Switch-Matrizen und
-Bidi-Bits; alles Weitere steht bitweise da und wird in den folgenden Stufen zu Bel-Optionen (z. B. LUT-Inhalt). Die Datei ist
+Dekodiert sind die CLB-Eingänge, die O- und T-Muxe der IOBs (mit Modus), Pips, Switch-Matrizen und die
+Richtung der Repowering-Puffer (Bidi-Bits); alles Weitere steht bitweise da und wird in den folgenden Stufen zu Bel-Optionen (z. B. LUT-Inhalt). Die Datei ist
 verlustfrei: Aus ihr ergibt sich jedes programmierte Bit, die Mux-Bits über die Codes.
 """
 import collections
@@ -88,8 +89,11 @@ def decode(db, raw):
         elif e.kind == "switch":
             g, p1, p2 = e.key
             items.append(Item("switch", db.switch_pos[g], "%d-%d" % tuple(sorted((p1, p2))), [e.index], None))
-        elif e.kind == "bidi":
-            items.append(Item("bidi", e.key[0], None, [e.index], None))
+        elif e.kind == "bidi":  # programmiert: der Puffer treibt nach unten bzw. rechts (graph._bidi)
+            gx, gy = (int(v) for v in e.key[0].split("G"))
+            line = db.lines.col_name.get(gx)
+            items.append(Item("bidi", e.key[0], "down" if line else "right", [e.index],
+                              line or db.lines.row_name.get(gy)))
         else:
             items.append(Item("bit", e.text, None, [e.index], None))
     return items, problems

@@ -87,11 +87,15 @@ struct Xc2064Impl : HimbaechelAPI
         return specific;
     }
 
+    // Geschwindigkeitsstufe aus dem Gerätenamen wie bei Xilinx: XC2064-33, -50, -70 (Umlaufrate in MHz),
+    // ohne Zusatz -70
     void init_database(Arch *arch) override
     {
         init_uarch_constids(arch);
         arch->load_chipdb("xc2064/chipdb-xc2064.bin");
-        arch->set_speed_grade("DEFAULT");
+        const std::string &dev = arch->args.device;
+        auto dash = dev.find('-');
+        arch->set_speed_grade(dash == std::string::npos ? "70" : dev.substr(dash + 1));
     }
 
     void init(Context *ctx) override
@@ -272,9 +276,9 @@ struct Xc2064Impl : HimbaechelAPI
                 continue;
             NetInfo *t = ci->getPort(id_T);
             const CellInfo *drv = t ? t->driver.cell : nullptr;
-            if (!drv || !drv->type.in(ctx->id("GND"), ctx->id("VCC")))
+            if (!drv || !drv->type.in(id_GND, id_VCC))
                 continue;
-            bool always_on = drv->type == ctx->id("GND");
+            bool always_on = drv->type == id_GND;
             ci->disconnectPort(id_T);
             ci->ports.erase(id_T);
             if (always_on) {
@@ -308,6 +312,79 @@ struct Xc2064Impl : HimbaechelAPI
                      off);
     }
 
+    // Konstanten: Der XC2064 hat keine Konstanten-Leitung. Ein konstanter LUT-Eingang geht in den LUT-Inhalt
+    // (INIT hängt danach nicht mehr von ihm ab, sein Eingangs-Mux bleibt aus), Set/Reset = 0 heißt ohne
+    // Set/Reset. Was bleibt (konstanter Ausgang eines Pads, Set/Reset = 1, Takt, ...), treibt eine LUT mit
+    // konstantem Inhalt, je Wert eine; ein FF-Dateneingang bekommt eine eigene (D nur aus F/FG der CLB).
+    void fold_constants()
+    {
+        int folded = 0, dropped = 0, luts = 0;
+        std::vector<IdString> drivers;
+        dict<int, NetInfo *> const_net; // 0/1 -> Netz der gemeinsamen Konstanten-LUT
+        auto const_lut = [&](int value, IdString name) {
+            CellInfo *lut = ctx->createCell(name, id_XC2000_LUT3);
+            for (int i = 0; i < 3; i++)
+                lut->addInput(lut_in(i));
+            lut->addOutput(id_O);
+            lut->params[id_INIT] = Property(value ? 0xFF : 0, 8);
+            NetInfo *net = ctx->createNet(ctx->idf("%s$O", name.c_str(ctx)));
+            lut->connectPort(id_O, net);
+            luts++;
+            return net;
+        };
+        std::vector<NetInfo *> nets; // vorher sammeln: const_lut legt Netze an
+        for (auto &n : ctx->nets) {
+            const CellInfo *drv = n.second->driver.cell;
+            if (drv && drv->type.in(id_GND, id_VCC))
+                nets.push_back(n.second.get());
+        }
+        for (NetInfo *net : nets) {
+            const CellInfo *drv = net->driver.cell;
+            drivers.push_back(drv->name);
+            int value = drv->type == id_VCC;
+            std::vector<PortRef> users;
+            for (auto &u : net->users)
+                users.push_back(u);
+            for (auto &u : users) {
+                CellInfo *ci = u.cell;
+                int width = ci->type == id_XC2000_LUT3 ? 3 : ci->type == id_XC2000_LUT4 ? 4 : 0;
+                int idx = -1;
+                for (int i = 0; i < width; i++)
+                    if (u.port == lut_in(i))
+                        idx = i;
+                ci->disconnectPort(u.port);
+                if (idx >= 0) { // LUT-Eingang: Inhalt für den festen Wert auf alle Adressen übertragen
+                    uint64_t old_init = uint64_t(ci->params.at(id_INIT).as_int64()), new_init = 0;
+                    for (int a = 0; a < (1 << width); a++) {
+                        int b = (a & ~(1 << idx)) | (value << idx);
+                        if ((old_init >> b) & 1)
+                            new_init |= uint64_t(1) << a;
+                    }
+                    ci->params[id_INIT] = Property(int64_t(new_init), 1 << width);
+                    folded++;
+                } else if (ci->type == id_XC2000_DFF && u.port.in(id_S, id_R) && value == 0) {
+                    dropped++;
+                } else if (ci->type == id_XC2000_DFF && u.port == id_D) {
+                    ci->connectPort(u.port, const_lut(value, ctx->idf("$xc2064_const%d$%s", value, ci->name.c_str(ctx))));
+                } else {
+                    if (!const_net.count(value))
+                        const_net[value] = const_lut(value, ctx->idf("$xc2064_const%d", value));
+                    ci->connectPort(u.port, const_net.at(value));
+                }
+            }
+        }
+        for (IdString name : drivers) {
+            CellInfo *drv = ctx->cells.at(name).get();
+            for (auto &p : drv->ports)
+                if (p.second.net)
+                    ctx->nets.erase(p.second.net->name);
+            ctx->cells.erase(name);
+        }
+        if (folded || dropped || luts)
+            log_info("Constants: %d LUT inputs folded into INIT, %d set/reset inputs dropped, %d constant LUTs.\n",
+                     folded, dropped, luts);
+    }
+
     static std::string storage_elements(int n)
     {
         return std::to_string(n) + (n == 1 ? " storage element" : " storage elements");
@@ -326,10 +403,9 @@ struct Xc2064Impl : HimbaechelAPI
         };
         h.remove_nextpnr_iobs(top_ports);
         fold_constant_tristate();
+        fold_constants();
         bind_constrained_pads();
         bind_clock_pads();
-        h.replace_constants(CellTypePort(id_VCC_DRV, id_VCC), CellTypePort(id_GND_DRV, id_GND), {}, {}, id_VCC,
-                            id_GND);
         int moved = route_q_feedback_to_i2();
         // Das FF bekommt seine Daten nur aus F bzw. FG derselben CLB. synth_xc2064 sorgt dafür, dass
         // jedes FF einen eigenen LUT hat; LUT und FF werden hier als Cluster gemeinsam platziert.
@@ -364,7 +440,7 @@ struct Xc2064Impl : HimbaechelAPI
         case id_XC2000_IOBUF.index:
             return id_IOB;
         }
-        return cell_type; // GND_DRV, VCC_DRV
+        return cell_type;
     }
 
     IdString getBelBucketForCellType(IdString cell_type) const override { return bel_type_for(cell_type); }
@@ -378,6 +454,8 @@ struct Xc2064Impl : HimbaechelAPI
     HimbaechelHelpers h;
     dict<IdString, BelId> pad_bels;
     std::array<BelId, 2> clock_pads; // P9 (GCLK), P43 (ACLK)
+    pool<IdString> clock_only_nets;  // Takte an P9/P43, die nur FF takten (preRoute)
+    pool<PipId> pad_exit_pips;       // ... und die Pips von dort ins allgemeine Routing
 
     IdString lut_in(int i) const { return ctx->idf("I[%d]", i); }
 
@@ -572,6 +650,34 @@ struct Xc2064Impl : HimbaechelAPI
         for (const char *k : {"router2/bbMargin/x", "router2/bbMargin/y"})
             if (!ctx->settings.count(ctx->id(k)))
                 ctx->settings[ctx->id(k)] = std::to_string(margin);
+        // Ein Takt an P9/P43, der nur Speicherelemente taktet, läuft wie bei XACT ganz über seinen Taktpuffer
+        // (GCLK bzw. ACLK, geringer Versatz). Sonst nähme der Router zu nahen CLBs den kürzeren Weg vom Pad
+        // über das allgemeine Routing.
+        clock_only_nets.clear();
+        pad_exit_pips.clear();
+        for (BelId pad : clock_pads) {
+            const CellInfo *ci = ctx->getBoundBelCell(pad);
+            const NetInfo *net = ci ? ci->getPort(id_O) : nullptr;
+            if (!net || net->users.entries() == 0)
+                continue;
+            bool only_ff = true;
+            for (auto &u : net->users)
+                only_ff &= u.cell->type == id_XC2000_DFF && u.port == id_CLK;
+            if (!only_ff)
+                continue;
+            clock_only_nets.insert(net->name);
+            Loc pl = ctx->getBelLocation(pad);
+            for (PipId pip : ctx->getPipsDownhill(ctx->getBelPinWire(pad, id_O))) {
+                int32_t id = local_gfx_id(ctx->getPipDstWire(pip), pl, -1);
+                if (id != GFX_WIRE_GCLK && id != GFX_WIRE_ACLK)
+                    pad_exit_pips.insert(pip);
+            }
+        }
+    }
+
+    bool checkPipAvailForNet(PipId pip, const NetInfo *net) const override
+    {
+        return !(net && pad_exit_pips.count(pip) && clock_only_nets.count(net->name));
     }
 
     // --- GUI: Schaltplan ----------------------------------------------------------------------
@@ -950,6 +1056,27 @@ struct Xc2064Impl : HimbaechelAPI
         return loc.x == 0 ? 'L' : 'R';
     }
 
+    // Repowering-Puffer an den Grenzen der 9 Sektionen (Datenblatt, xc2064db.graph): auf den Einzelsegmenten,
+    // die über die Zeilen D und G bzw. die Spalten D und G hinweg laufen, kurz vor deren Kanal (bei Shirriff
+    // zwischen io3 und local.0 bzw. clbw3 und local.1). Zwei Dreiecke Spitze an Spitze: er treibt in eine der
+    // beiden Richtungen, welche, ergibt sich aus dem Routing.
+    static constexpr float BUF_D = 0.011, BUF_W = 0.005, BUF_L = 0.007;
+    static bool buffered_segment(int k) { return k == 3 || k == 6; } // Stücke @C und @F
+    void bidi_buffer(std::vector<GraphicElement> &g, GraphicElement::style_t style, Loc loc, bool vert, float along,
+                     float across) const
+    {
+        for (float s : {-1.0f, 1.0f}) {
+            if (vert)
+                poly(g, style, loc,
+                     {{across - BUF_W, along + s * BUF_L}, {across + BUF_W, along + s * BUF_L}, {across, along},
+                      {across - BUF_W, along + s * BUF_L}});
+            else
+                poly(g, style, loc,
+                     {{along + s * BUF_L, across - BUF_W}, {along + s * BUF_L, across + BUF_W}, {along, across},
+                      {along + s * BUF_L, across - BUF_W}});
+        }
+    }
+
     // Eigenes Stück einer Kanalleitung zeichnen (die ganze Leitung bis zu den Pips, Nachbarstücke nichts)
     void draw_channel(std::vector<GraphicElement> &g, GraphicElement::style_t style, Loc loc, const Chan &c) const
     {
@@ -958,6 +1085,8 @@ struct Xc2064Impl : HimbaechelAPI
             float px = vx(x, c.line);
             if (px < 0)
                 return;
+            if (c.line <= V_LOC5 && buffered_segment(y))
+                bidi_buffer(g, style, loc, true, 1 + BUF_D, px);
             if (c.line <= V_LOC4) { // Einzelsegment: von Matrix zu Matrix (am Rand bis in den Randkanal)
                 float y0 = tile_has_sm(x, y) ? sm_box(x, y, sm_of_v(c.line)).y1 : 0.0f;
                 float y1 = tile_has_sm(x, y + 1) ? 1 + sm_box(x, y + 1, sm_of_v(c.line)).y0 : 1.36f;
@@ -980,6 +1109,8 @@ struct Xc2064Impl : HimbaechelAPI
             float py = hy(y, c.line);
             if (py < 0)
                 return;
+            if (c.line >= H_LOC1 && c.line <= H_LOC5 && buffered_segment(x))
+                bidi_buffer(g, style, loc, false, 1 + BUF_D, py);
             if (c.line >= H_LOC1 && c.line <= H_LOC5) {
                 float x0 = tile_has_sm(x, y) ? sm_box(x, y, sm_of_h(y, c.line)).x1 : 0.0f;
                 float x1 = tile_has_sm(x + 1, y) ? 1 + sm_box(x + 1, y, sm_of_h(y, c.line)).x0 : 1.36f;
@@ -1096,16 +1227,16 @@ struct Xc2064Impl : HimbaechelAPI
         bool cross; // Kreuzung mit der Stichleitung (Leitung quer zum Rand)
     };
     // Lage des Pips zwischen Pin p (0: I, 1: O, 2: T) des IOB z und der Leitung other (Grafik-ID in der
-    // Pad-Kachel). false: kein Kästchen (Konstante, X/Y direkt).
+    // Pad-Kachel). false: kein Kästchen (X/Y direkt).
     static bool iob_pip(Loc loc, int z, int p, int32_t other, IobPip &res)
     {
         Iob b = iob(loc, z);
         float u = pin_u(b, PIN_R[p]);
-        if (other == GFX_WIRE_GCLK || other == GFX_WIRE_GCLK_SRC) { // P9: CLK.AA.O über der Zeile A
+        if (other == GFX_WIRE_GCLK) { // P9: CLK.AA.O über der Zeile A (Ausgangs-Mux und Taktpuffer)
             res = {u, 1 + hy(1, H_CLK), false};
             return true;
         }
-        if (other == GFX_WIRE_ACLK || other == GFX_WIRE_ACLK_SRC) { // P43: row.I.clk
+        if (other == GFX_WIRE_ACLK) { // P43: row.I.clk
             res = {u, 1 - hy(LAST, H_CLK), false};
             return true;
         }
@@ -1341,10 +1472,6 @@ struct Xc2064Impl : HimbaechelAPI
                      {{IB_R - iw, IB_BASE}, {IB_R + iw, IB_BASE}, {IB_R, IB_TIP}, {IB_R - iw, IB_BASE}});
             break;
         }
-        case id_GND_DRV.index:
-        case id_VCC_DRV.index:
-            box(g, style, x + 0.40 + loc.z * 0.25, y + 0.50, x + 0.58 + loc.z * 0.25, y + 0.68);
-            break;
         }
     }
 
@@ -1478,7 +1605,7 @@ struct Xc2064Impl : HimbaechelAPI
         Chan c = chan(tilewire);
         if (c.ok && c.dx == 0 && c.dy == 0 && loc.x > 0 && loc.y > 0)
             draw_channel(g, style, loc, c);
-        // Sonst Teile von Knoten, die andere Drähte zeichnen (X/Y direkt im IOB, Taktpuffer)
+        // Sonst Teile von Knoten, die andere Drähte zeichnen (X/Y direkt im IOB)
     }
 
     // Grafik-ID des Drahts, den ein Knoten in der Kachel loc hat. nextpnr übergibt drawPip die
@@ -1579,7 +1706,7 @@ struct Xc2064Impl : HimbaechelAPI
         }
 
         // IOB: Kästchen, wo ein Pin bzw. seine Stichleitung eine Leitung kreuzt (beim Taktpuffer die
-        // Taktleitung); X/Y direkt am Eingang des Ausgangsmultiplexers; Konstanten ohne
+        // Taktleitung); X/Y direkt am Eingang des Ausgangsmultiplexers
         int32_t pin = (src_id >= GFX_WIRE_IO0_I && src_id <= GFX_WIRE_IO1_T) ? src_id : dst_id;
         if (pin < GFX_WIRE_IO0_I || pin > GFX_WIRE_IO1_T)
             return;
@@ -1603,7 +1730,13 @@ struct Xc2064Impl : HimbaechelAPI
 struct Xc2064Arch : HimbaechelArch
 {
     Xc2064Arch() : HimbaechelArch("xc2064") {};
-    bool match_device(const std::string &device) override { return device == "XC2064" || device == "xc2064"; }
+    bool match_device(const std::string &device) override
+    {
+        std::string d = device;
+        for (auto &c : d)
+            c = std::toupper(static_cast<unsigned char>(c));
+        return d == "XC2064" || d == "XC2064-33" || d == "XC2064-50" || d == "XC2064-70";
+    }
     std::unique_ptr<HimbaechelAPI> create(const std::string &device) override
     {
         return std::make_unique<Xc2064Impl>();

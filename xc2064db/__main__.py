@@ -104,13 +104,29 @@ def main():
           "der Graph verbindet die Pins der Netze %s wie XACT und trennt alle Netze (CB, DB hat XACT "
           "nicht geroutet) %s %s" % (" ".join(ok), bad or "", [r[:2] for r in res if r[2] == "getrennt"]))
 
+    print("Repowering-Puffer (Bidi-Bits) gegen alle XACT-Bitstreams")
+    gs = graph.Graph(entries, lines, split_bidi=True)
+    nv = sum(1 for b in gs.buffers if b.line.startswith("col."))
+    check(len(gs.buffers) == 158 and nv == 86 and
+          {b.g for b in gs.buffers if b.line.startswith("col.")} == {52, 109} and
+          {b.g for b in gs.buffers if b.line.startswith("row.")} == {65, 125},
+          "158 Puffer auf den Einzelsegmenten an den Sektionsgrenzen: %d senkrecht über den Zeilen D und G, "
+          "%d waagerecht vor den Spalten D und G" % (nv, len(gs.buffers) - nv))
+    total, bad = 0, []
+    for f in sources.XACT_BITSTREAMS:
+        ok, b = gs.bidi_check(bitstream.read(f).raw)
+        total += ok
+        bad += [(f.split("/")[-1],) + x for x in b]
+    check(not bad and total >= 18, "Richtung jedes benutzten Puffers: Bit 0 treibt nach unten bzw. rechts, Bit 1 "
+          "nach oben bzw. links (%d Puffer in TEST1.RBT und AND_OR.BIT) %s" % (total, bad or ""))
+
     iob_ot = sum(1 for e in entries if e.kind == "iobmux" and e.key[1] in "OT")
-    decoded = kinds["pip"] + kinds["switch"] + kinds["clbmux"] + iob_ot
-    named = sum(kinds[k] for k in ("clb", "iob", "iobmux", "clkmux", "other")) - iob_ot
+    decoded = kinds["pip"] + kinds["switch"] + kinds["clbmux"] + iob_ot + kinds["bidi"]
+    named = sum(kinds[k] for k in ("clb", "iob", "iobmux", "other")) - iob_ot
     print("Abdeckung der %d benutzten Bits:" % (bitmap.NBITS - kinds["unused"]))
-    print("  dekodiert (Pip, Switch, CLB-Eingang, IOB-Ausgang und -Tristate): %d" % decoded)
-    print("  nur benannt (LUT, FF, X/Y, IOB-Latch und -Takt, Taktpuffer, Other): %d" % named)
-    print("  offen (Bidi): %d" % kinds["bidi"])
+    print("  dekodiert (Pip, Switch, CLB-Eingang, IOB-Ausgang und -Tristate, Puffer-Richtung): %d" % decoded)
+    print("  nur benannt (LUT, FF, X/Y, IOB-Latch und -Takt, Other): %d" % named)
+    print("  offen (Eingänge der Taktpuffer CLK.AA.I, CLK.II.I: kein Bitstream nutzt sie): %d" % kinds["clkmux"])
     if failed:
         print("%d Gegenproben fehlgeschlagen" % len(failed))
         return 1

@@ -18,6 +18,12 @@ OPENXC_DEF_TXT = os.path.join(OPENXC, "pin_planning", "XC2064-def.txt")
 OPENXC_CSV = os.path.join(OPENXC, "bitstream", "XC2064-spreadsheet.csv")
 OPENXC_GENERATOR = os.path.join(OPENXC, "bitstream", "generate_bitstream.py")
 OPENXC_XACT_DIR = os.path.join(OPENXC, "bitstream", "XACT_comparisons")
+OPENXC_AND_OR = os.path.join(OPENXC, "hardware", "bitstreams", "AND_OR.BIT")
+
+# alle mit XACT erzeugten Bitstreams (Gegenproben)
+XACT_BITSTREAMS = [TEST1_RBT, OPENXC_AND_OR] + sorted(
+    os.path.join(OPENXC_XACT_DIR, f) for f in (os.listdir(OPENXC_XACT_DIR) if os.path.isdir(OPENXC_XACT_DIR) else [])
+    if f.upper().endswith(".BIT"))
 
 # Dateien, aus denen der Generator die Chipdb baut (für die INPUTS in CMakeLists.txt)
 GENERATOR_INPUTS = [DEF_TXT, DRAW_JS, CLB_JS, IOB_JS]

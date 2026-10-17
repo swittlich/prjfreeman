@@ -12,6 +12,7 @@ import collections
 import re
 
 from . import sources
+from .graph import conn_on
 
 
 def parse(path=None):
@@ -122,10 +123,7 @@ def check_nets(nets, graph, raw, skip=()):
         parent[find(a)] = find(b)
 
     for cn in graph.conns:
-        if cn.kind in ("mux", "iobo", "iobt"):
-            if sum(raw[b] << n for n, b in enumerate(cn.bits)) == cn.code:
-                union(cn.a, cn.b)
-        elif all(raw[b] == 0 for b in cn.bits):
+        if conn_on(cn, raw):
             union(cn.a, cn.b)
     owner, result = {}, []
     for name, net in nets.items():

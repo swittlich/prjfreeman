@@ -28,8 +28,9 @@ Verbindungsarten (Conn.kind): pip (PIP-Bit, zwischen allgemeinen Leitungen in be
 out (PIP-Bit von X/Y auf eine Leitung), switch (Magic-Bit), junction (Verbindungspunkt der fünften
 Leitung), mux (CLB-Eingang: Quelle -> Pin, bits = Mux-Bits, code), iobo/iobt (Ausgangs- bzw. T-Mux eines
 IOB: Quelle -> Pnn.O/T, mit code; Treiber aus/an sind Codes ohne Quelle), iobi (PIP-Bit: Pnn.I ->
-Leitung). Nicht erfasst (Stufe 4): Taktpuffer und Konstanten; die Einträge aus iob.js ohne PIP-Bit
-stehen in Graph.unmodelled.
+Leitung), clkbuf (Eingang eines Taktpuffers, Code unbekannt), bidi (Repowering-Puffer, nur im Prüfmodus
+split_bidi). Die Einträge aus iob.js ohne PIP-Bit stehen in Graph.unmodelled. Konstanten gibt es im
+Original nicht als Leitung (nextpnr: pack() faltet sie in LUT-Inhalte).
 """
 import bisect
 import collections
@@ -40,6 +41,15 @@ from .lines import Lines
 
 LETTERS = "ABCDEFGHI"
 Conn = collections.namedtuple("Conn", "kind a b bits code name")
+Buffer = collections.namedtuple("Buffer", "name line g bit seg")
+CODED = ("mux", "iobo", "iobt", "clkbuf", "bidi")  # Verbindungen über einen Code statt eines PIP-Bits
+
+
+def conn_on(cn, raw):
+    """Ist die Verbindung im Bitstream raw (0 = programmiert) geschaltet? Code None (unbekannt): nie."""
+    if cn.kind in CODED:
+        return cn.code is not None and sum(raw[b] << n for n, b in enumerate(cn.bits)) == cn.code
+    return all(raw[b] == 0 for b in cn.bits)
 
 
 def _split(name):
@@ -56,16 +66,23 @@ def _next(c):
 
 
 class Graph:
-    def __init__(self, entries=None, lines=None):
+    def __init__(self, entries=None, lines=None, split_bidi=False):
+        """split_bidi: Einzelsegmente an den Repowering-Puffern auftrennen (Stück dahinter: Zusatz "+", Puffer
+        als zwei gerichtete Verbindungen "bidi" mit dem Bitwert als Code). Nur für Prüfungen: Ein Puffer ist
+        nie aus, beide Stücke führen also immer dasselbe Netz; für den Router bleibt das Segment ein Knoten,
+        die Richtung folgt aus dem Routing (bidi_bit)."""
         self.entries = entries or bitmap.load()
         self.lines = lines or Lines()
+        self.split_bidi = split_bidi
         self.conns = []
         self.unmodelled = []  # (Pin, Eintrag aus iob.js, Grund)
         self._cuts()
+        self._bidi()
         self._pips()
         self._switches()
         self._iobs()
         self._muxes()
+        self._clkbufs()
         used = {b for cn in self.conns for b in cn.bits}
         self.skipped = collections.Counter(
             "PIP %s" % self.lines.pip_name(e.key[0]) for e in self.entries if e.kind == "pip" and e.index not in used)
@@ -97,8 +114,58 @@ class Graph:
         self.col_cuts = {k: sorted(v, key=lambda c: -c[0]) for k, v in col_cuts.items()}
         self.row_cuts = {k: sorted(v) for k, v in row_cuts.items()}
 
+    def _bidi(self):
+        """Repowering-Puffer an den Grenzen der 9 Sektionen (Datenblatt): je Bidi-Bit ein Puffer auf einem
+        Einzelsegment, senkrecht über den Zeilen D und G (alle local.1-5), waagerecht vor den Spalten D und G.
+        Bit 0 (programmiert): der Puffer treibt nach unten bzw. rechts, Bit 1: nach oben bzw. links (belegt
+        mit TEST1.RBT und AND_OR.BIT, siehe bidi_check). buffers: Liste Buffer(Name, Leitung, Lage G entlang
+        der Leitung, Bit, Segment)."""
+        self.buffers = []
+        self.bidi_at = collections.defaultdict(list)
+        for e in self.entries:
+            if e.kind != "bidi":
+                continue
+            gx, gy = (int(v) for v in e.key[0].split("G"))
+            col, row = self.lines.col_name.get(gx), self.lines.row_name.get(gy)
+            if (col is None) == (row is None):
+                raise ValueError("Bidi %s liegt nicht auf genau einer Leitung" % e.key[0])
+            line, g = (col, gy) if col else (row, gx)
+            seg = self._seg_base(line, g, line.startswith("col."))
+            self.buffers.append(Buffer(e.key[0], line, g, e.index, seg))
+            self.bidi_at[line].append((g, e.index, e.key[0]))
+        if self.split_bidi:
+            for b in self.buffers:
+                self.conns.append(Conn("bidi", b.seg, b.seg + "+", [b.bit], 0, "%s %s" % (b.name, b.line)))
+                self.conns.append(Conn("bidi", b.seg + "+", b.seg, [b.bit], 1, "%s %s" % (b.name, b.line)))
+
+    def bidi_bit(self, buf, g_in):
+        """Bitwert des Puffers buf, wenn das Signal bei g_in (G entlang der Leitung) in sein Segment kommt"""
+        before = g_in > buf.g if buf.line.startswith("col.") else g_in < buf.g
+        return 0 if before else 1
+
+    def _beyond(self, line, base, g):
+        """Knoten an der Stelle g des Stücks base: base selbst oder, im Prüfmodus split_bidi hinter einem
+        Puffer des Stücks (unterhalb bzw. rechts davon), base + "+" """
+        if not self.split_bidi:
+            return base
+        vertical = line.startswith("col.")
+        for bg, _, _ in self.bidi_at.get(line, ()):
+            if (g < bg if vertical else g > bg) and self._seg_base(line, bg, vertical) == base:
+                return base + "+"
+        return base
+
+    def _seg_base(self, line, g, vertical):
+        return self._seg_col(line, g) if vertical else self._seg_row(line, g)
+
     def seg_col(self, line, y):
         """Knoten der senkrechten Leitung line an der Höhe y (G)"""
+        return self._beyond(line, self._seg_col(line, y), y)
+
+    def seg_row(self, line, x):
+        """Knoten der waagerechten Leitung line an der Stelle x (G)"""
+        return self._beyond(line, self._seg_row(line, x), x)
+
+    def _seg_col(self, line, y):
         kind, c, rest = _split(line)
         if rest in ("local.5", "local.6") and c not in "AI":
             return self._fifth(c, y, rest)
@@ -115,7 +182,7 @@ class Graph:
             raise ValueError("%s: Kreuzung bei G %d außerhalb der Segmente" % (line, y))
         return "%s@%s" % (line, r)
 
-    def seg_row(self, line, x):
+    def _seg_row(self, line, x):
         cuts = self.row_cuts.get(line)
         if not cuts:
             return {"row.I.clk": "ACLK", "CLK.AA.O": "GCLK"}.get(line, line)
@@ -190,8 +257,8 @@ class Graph:
                 clb = r + _prev(c)
                 src = "%s.%s" % (clb, "Y" if rk == "y" else "X")
                 self.conns.append(Conn("out", src, self.seg_col(col, gy), [e.index], None, name))
-            elif rk == "local.0":  # Verbindungspunkt der fünften Leitung
-                self.conns.append(Conn("junction", "col.%s.local.5@%s" % (c, _prev(r)),
+            elif rk == "local.0":  # Verbindungspunkt der fünften Leitung (über D und G hinter dem Puffer)
+                self.conns.append(Conn("junction", self.seg_col("col.%s.local.5" % c, gy),
                                        "col.%s.local.5@%s" % (c, r), [e.index], None, name))
             else:
                 self.conns.append(Conn("pip", self.seg_col(col, gy), self.seg_row(row, gx), [e.index], None, name))
@@ -207,12 +274,13 @@ class Graph:
         """Knoten am Pin einer Switch-Matrix"""
         line, side = self.sm_pins[(sm, pin)]
         t = sm[:2]
+        px, py = switches.pin_g(self.sm_g[sm], pin)
         if side == "top":
-            return "%s@%s" % (line, _prev(t[0]))
+            return self._beyond(line, "%s@%s" % (line, _prev(t[0])), py)
         if side == "bottom":
             return "%s@%s" % (line, t[0])
         if side == "left":
-            return "%s@%s" % (line, _prev(t[1]))
+            return self._beyond(line, "%s@%s" % (line, _prev(t[1])), px)
         return "%s@%s" % (line, t[1])
 
     def _iobs(self):
@@ -280,6 +348,19 @@ class Graph:
                     src = pin + ".I"
                 self.conns.append(Conn("mux", src, sink, bits, code, "%s %s" % (sink, s.line)))
 
+    def _clkbufs(self):
+        """Taktpuffer (Datenblatt Bild 8b): GCLK oben links treibt CLK.AA.O und col.*.clk, ACLK unten rechts
+        row.I.clk. Ihre Eingangs-Muxe CLK.AA.I (6 Bits) und CLK.II.I (8 Bits) dekodiert auch Shirriff nicht, und
+        kein XACT-Bitstream benutzt sie. Modelliert ist nur der Weg vom eigenen Pad (P9 bzw. P43) mit den
+        Bits des Muxes und unbekanntem Code (None)."""
+        bits = collections.defaultdict(dict)
+        for e in self.entries:
+            if e.kind == "clkmux":
+                bits[e.key[0]][e.key[1]] = e.index
+        for mux, pin, net in (("CLK.AA.I", "P9", "GCLK"), ("CLK.II.I", "P43", "ACLK")):
+            self.conns.append(Conn("clkbuf", pin + ".I", net, [bits[mux][n] for n in sorted(bits[mux])], None,
+                                   "%s %s" % (mux, pin)))
+
     def mux_source(self, m, s, gx, gy):
         r, c = m.tile
         _, _, kind = _split(s.line)
@@ -302,6 +383,56 @@ class Graph:
         if s.line.startswith("col."):
             return self.seg_col(s.line, gy)
         return self.seg_row(s.line, gx)
+
+    # --- Prüfung der Puffer-Richtung -----------------------------------------------------------
+    def bidi_check(self, raw):
+        """Richtung der Repowering-Puffer in einem Bitstream (nur im Prüfmodus split_bidi). Je Puffer: ohne ihn
+        die beiden Seiten des Netzes; liegt der Treiber (X/Y, Pnn.I) auf einer Seite und eine Senke
+        (CLB-Eingang, Pnn.O/T) auf der anderen, muss das Bit dem Code dieser Richtung entsprechen.
+        Ergebnis: Zähler passend, Liste der Widersprüche (Name, Bit, Richtung)."""
+        assert self.split_bidi
+        edges, bufs = [], {}
+        for cn in self.conns:
+            if cn.kind == "bidi":
+                bufs.setdefault(cn.name, []).append(cn)
+            elif conn_on(cn, raw):
+                edges.append((cn.a, cn.b))
+        all_buf = [(c[0].a, c[0].b) for c in bufs.values()]
+
+        def is_driver(n):
+            return re.fullmatch(r"[A-H][A-H]\.[XY]|P\d+\.I", n)
+
+        def is_sink(n):
+            return re.fullmatch(r"[A-H][A-H]\.[ABCDK]|P\d+\.[OT]", n)
+
+        ok, bad = 0, []
+        for name, (down, up) in sorted(bufs.items()):
+            parent = {}
+
+            def find(n):
+                parent.setdefault(n, n)
+                while parent[n] != n:
+                    parent[n] = parent[parent[n]]
+                    n = parent[n]
+                return n
+            for a, b in edges + [e for e in all_buf if e != (down.a, down.b)]:
+                parent[find(a)] = find(b)
+            if find(down.a) == find(down.b):
+                continue  # Ring über einen anderen Weg (kommt in den Bitstreams nicht vor)
+            sides = [[n for n in parent if find(n) == find(x)] for x in (down.a, down.b)]
+            drv = [any(is_driver(n) for n in s) for s in sides]
+            snk = [any(is_sink(n) for n in s) for s in sides]
+            if drv[0] and snk[1] and not drv[1]:
+                code = down.code
+            elif drv[1] and snk[0] and not drv[0]:
+                code = up.code
+            else:
+                continue  # eine Seite unbenutzt: Richtung beliebig
+            if raw[down.bits[0]] == code:
+                ok += 1
+            else:
+                bad.append((name, raw[down.bits[0]], "nach unten/rechts" if code == down.code else "nach oben/links"))
+        return ok, bad
 
     # --- Abfragen ------------------------------------------------------------------------------
     def nodes(self):

@@ -4,7 +4,7 @@
 # Submodule shirriff-xc2064) mit der Bitkarte XC2064-def.txt, den Leitungsnamen (draw.js), den
 # CLB-Eingangs-Muxen (clb.js) und den IOB-Muxen (iob.js). Das Paket xc2064db (arch/xc2064/xc2064db) liest
 # diese Daten; der Routing-Graph entsteht aus xc2064db.graph, jeder Pip dort entspricht einem Bit bzw.
-# einem Mux-Code des Originals (Ausnahmen: Konstanten und Taktpuffer, Stufe 4, siehe README).
+# einem Mux-Code des Originals (Ausnahme: die Eingänge der Taktpuffer, deren Codes niemand kennt).
 #
 # Raster (x, y; y nach unten): 8x8 CLBs bei x, y = 1..8 und ein IO-Ring bei 0 bzw. 9. Shirriffs 9x9
 # Kacheln AA..II (Zeile, Spalte) entsprechen x = Spalte, y = Zeile = 1..9: jede enthält die Kanäle
@@ -30,8 +30,12 @@
 #     IOBs (iob.js):  O-Mux (Leitungen, X/Y der Rand-CLB, GCLK an P9) und T-Mux (2 Einzelsegmente, 2 Long
 #                     Lines; Puffer aus/an ist Konfiguration, kein Pip), I über PIP-Bits auf die Leitungen
 #                     beider Kanäle am Pad und fest an die Eingänge der Rand-CLB
-#   Übergangsweise (Stufe 4): Taktpuffer fest an P9 (GCLK) und P43 (ACLK), Konstanten GND/VCC auf die
-#   CLB-Eingänge und den IOB-Ausgang I.
+#     Taktpuffer:     GCLK von P9, ACLK von P43 (Bits der Eingangs-Muxe CLK.AA.I/CLK.II.I, Code unbekannt)
+#     Konstanten:     keine Leitung (wie im Original); pack() faltet sie in LUT-Inhalte oder setzt eine LUT ein
+#   Repowering-Puffer an den Sektionsgrenzen sind kein Pip: ein Puffer ist nie aus, seine Richtung folgt aus
+#   dem Routing (xc2064db.graph.bidi_bit).
+#   Timing: RC-Modell wie im Datenblatt (Interconnect Performance) mit drei Geschwindigkeitsstufen, siehe
+#   set_timings().
 from os import path
 import re
 import sys
@@ -47,7 +51,6 @@ X = N_CLB + 2
 Y = N_CLB + 2
 LAST = N_CLB + 1           # Index der 9. Switch-Matrix-Spalte/-Zeile
 LETTERS = "ABCDEFGHI"
-GCLK_PIN, ACLK_PIN = "P9", "P43"
 
 # Pads nach Shirriffs iob.js: (Pin, Kachel Zeile+Spalte, Anschlussrichtung)
 PADS = [
@@ -99,11 +102,6 @@ def is_clb(x, y):
 
 def has_sm(x, y):
     return 1 <= x <= LAST and 1 <= y <= LAST
-
-
-def is_io(x, y):
-    return not is_clb(x, y) and (has_sm(x, y) or any(p["x"] == x and p["y"] == y for p in PAD_INFO)
-                                 or (x == 0 and 1 <= y <= N_CLB) or (y == 0 and 1 <= x <= LAST))
 
 
 def tile_xy(t):
@@ -160,7 +158,7 @@ def place(cn):
     if cn.kind in ("iobo", "iobt"):  # IOB: in der Kachel des Pads
         p = PAD_BY_PIN[cn.b.split(".")[0]]
         return tile_name(p["x"], p["y"])
-    if cn.kind == "iobi":
+    if cn.kind in ("iobi", "clkbuf"):
         p = PAD_BY_PIN[cn.a.split(".")[0]]
         return tile_name(p["x"], p["y"])
     if cn.kind == "mux":
@@ -176,15 +174,23 @@ def place(cn):
 
 
 def timing_class(cn):
+    """Pip-Klasse: SM (Switch-Matrix) und PIP (PIP-Bit) sind Pass-Transistoren, INMUX die Eingangs-Muxe von
+    CLB und IOB, GCLK der Taktpuffer"""
     if cn.kind == "switch":
         return "SM"
     if cn.kind in ("mux", "iobo", "iobt"):
         return "INMUX"
-    if cn.kind in ("out", "iobi"):
-        return "OUTDRV"
-    if ".long." in cn.a or ".long." in cn.b or "CLK" in cn.a or "CLK" in cn.b:
-        return "LONGDRV"
+    if cn.kind == "clkbuf":
+        return "GCLK"
     return "PIP"
+
+
+def node_class(node):
+    """Knotenklasse für das RC-Modell: Einzelsegment, Long Line, Taktnetz; Pins ohne"""
+    if node in ("GCLK", "ACLK"):
+        return "CLKNET"
+    m = re.fullmatch(r"(col|row)\.[A-I]\.(local|long)\.\d(?:@[A-I])?", node)
+    return ("LONG" if m[2] == "long" else "SEG") if m else ""
 
 
 class Builder:
@@ -236,15 +242,10 @@ class Builder:
         return None
 
     def clb(self, x, y):
-        """Bels und interne Pips einer CLB"""
+        """Bels und interne Pips einer CLB (LOCAL: Teil der Laufzeit der Logik, XYDRV: Ausgangstreiber)"""
         xy = (x, y)
-        for w in ("GND", "VCC"):
-            self.wire(xy, w, w)
         for p in "ABCDK":
             self.wire(xy, p, "CLB_IN")
-            if p != "K":  # Konstanten auf A-D (übergangsweise, Stufe 4: in die LUT-Inhalte)
-                self.pip(xy, "GND", p, "")
-                self.pip(xy, "VCC", p, "")
         for o in "XY":
             self.wire(xy, o, "CLB_OUT")
         self.wire(xy, "Q", "FF_Q")
@@ -274,28 +275,18 @@ class Builder:
                                      ("Q", "Q", PinType.OUTPUT)]))
         for o in "XY":
             for s in ("F_O", "G_O", "FG_O", "Q"):
-                self.pip(xy, s, o, "LOCAL")
+                self.pip(xy, s, o, "XYDRV")
 
     def iob(self, p):
         """IOB-Pad: Bel und Drähte. Seine Muxe und Pips kommen aus dem Graphen (iob.js, routing()); der
         Modus an/aus/Tristate folgt aus dem Zelltyp (pack() in xc2064.cc), T hat daher keine Konstanten."""
         xy, z = (p["x"], p["y"]), p["z"]
-        for w in ("GND", "VCC"):
-            self.wire(xy, w, w)
         for sfx, typ in (("I", "IO_I"), ("T", "IO_T"), ("O", "IO_O"), ("PAD", "IO_PAD")):
             self.wire(xy, "IO%d_%s" % (z, sfx), typ)
         self.bels = getattr(self, "bels", {})
         self.bels.setdefault(xy, []).append((p["pin"], "IOB", z, [
             ("I", "IO%d_I" % z, PinType.INPUT), ("T", "IO%d_T" % z, PinType.INPUT),
             ("O", "IO%d_O" % z, PinType.OUTPUT), ("PAD", "IO%d_PAD" % z, PinType.INOUT)]))
-        for c in ("GND", "VCC"):  # konstanter Ausgang (übergangsweise, Stufe 4: Konstanten)
-            self.pip(xy, c, "IO%d_I" % z, "")
-        # Taktpuffer an den Pads P9 (GCLK) und P43 (ACLK), übergangsweise ohne die Puffer-Muxe (Stufe 4)
-        if p["pin"] in (GCLK_PIN, ACLK_PIN):
-            net = "GCLK" if p["pin"] == GCLK_PIN else "ACLK"
-            self.wire(xy, net + "_SRC", "GCLK")
-            self.node(net, xy, net + "_SRC")
-            self.pip(xy, "IO%d_O" % z, net + "_SRC", "GCLK")
 
     def build(self):
         ch = self.ch
@@ -311,10 +302,10 @@ class Builder:
                 xy = (x, y)
                 tt = ch.create_tile_type("T_X%dY%d" % (x, y))
                 for name, typ in sorted(self.wires.get(xy, {}).items()):
-                    if typ in ("GND", "VCC"):
-                        tt.create_wire(name, typ, const_value=typ)
-                    else:
-                        tt.create_wire(name, typ)
+                    w = tt.create_wire(name, typ)
+                    node = self.wire_owner.get((xy, name))
+                    if node and len(self.node_wires[node]) == 1 and node_class(node):  # Knoten aus einem Draht
+                        w.timing_idx = ch.timing.node_class_idx(node_class(node))
                 for name, typ, z, pins in self.bels.get(xy, []):
                     bel = tt.create_bel(name, typ, z=z)
                     for pin, w, d in pins:
@@ -326,37 +317,50 @@ class Builder:
                     tt.create_group("SM1", "SWITCHBOX")
                 if is_clb(x, y):
                     tt.create_group("CLB", "CLB_FRAME")  # nur für die GUI: Rahmen der CLB
-                if not is_clb(x, y) and not is_io(x, y):  # Ecken: Treiber der Konstanten
-                    for w in ("GND", "VCC"):
-                        if w not in self.wires.get(xy, {}):
-                            tt.create_wire(w, w, const_value=w)
-                    gnd = tt.create_bel("GND_DRV", "GND_DRV", z=0)
-                    tt.add_bel_pin(gnd, "GND", "GND", PinType.OUTPUT)
-                    vcc = tt.create_bel("VCC_DRV", "VCC_DRV", z=1)
-                    tt.add_bel_pin(vcc, "VCC", "VCC", PinType.OUTPUT)
                 ch.set_tile_type(x, y, "T_X%dY%d" % (x, y))
         for node, wires in self.node_wires.items():
             if len(wires) > 1:
-                ch.add_node([NodeWire(x, y, w) for x, y, w in wires])
+                ch.add_node([NodeWire(x, y, w) for x, y, w in wires], timing_class=node_class(node))
+
+
+# Geschwindigkeitsstufen: die Zahl ist die Umlaufrate (Toggle Rate) eines FF in MHz (Datenblatt "Device
+# Performance": FF mit globalem Takt, Q über die Logik zurück an D). Die Tabellen "CLB/IOB Switching
+# Characteristic Guidelines" fehlen in der vorliegenden Kopie des Datenblatts; bis dahin sind die Werte der
+# Logik so aufgeteilt, dass Clock-to-Q + Logik + Setup genau eine Periode der Umlaufrate ergeben.
+SPEED_GRADES = {"33": 70 / 33, "50": 70 / 50, "70": 1.0}  # Faktor gegenüber -70
+T_CKO, T_ILO, T_ILO4, T_ICK = 4500, 6000, 7000, 3800  # ps bei -70: 4,5 + 6,0 + 3,8 = 14,3 ns = 1 / 70 MHz
+# Interconnect (Datenblatt "Interconnect Performance"): eine Kette von Pass-Transistoren ist eine Kette von
+# RC-Gliedern (Widerstand jedes Schalters mal die Kapazität dahinter), die an jedem Treiber neu beginnt. In
+# nextpnr: Schalter (SM, PIP, Eingangs-Mux) unbuffered mit Widerstand R_SW, die Leitungen mit ihrer
+# Kapazität; CLB-Ausgang und Taktpuffer sind Treiber. Ein Einzelsegment hinter einem Schalter kostet so
+# etwa 0,5 ns, eine Long Line 4 ns (Größenordnung, bis zu den Tabellen der Data Books).
+R_SW, R_DRV = 2000000, 1000000  # Milliohm: Pass-Transistor, Ausgangstreiber der CLB
+C_SEG, C_LONG = 250, 2000  # Femtofarad: Einzelsegment, Long Line
+T_GCLK = 4000  # ps: Taktpuffer
 
 
 def set_timings(ch: Chip):
-    # Größenordnung XC2064-70 (1985): Logik ~15 ns, Pass-Transistoren einige ns (Werte in ps)
-    speed = "DEFAULT"
-    tmg = ch.set_speed_grades([speed])
-    for name, delay in (("SM", 2500), ("PIP", 1500), ("INMUX", 1500), ("LOCAL", 500), ("OUTDRV", 1500),
-                        ("LONGDRV", 4000), ("GCLK", 3000)):
-        tmg.set_pip_class(grade=speed, name=name, delay=TimingValue(delay),
-                          in_cap=TimingValue(5000), out_res=TimingValue(1000))
-    lut3 = ch.timing.add_cell_variant(speed, "XC2000_LUT3")
-    for i in range(3):
-        lut3.add_comb_arc(f"I[{i}]", "O", TimingValue(15000))
-    lut4 = ch.timing.add_cell_variant(speed, "XC2000_LUT4")
-    for i in range(4):
-        lut4.add_comb_arc(f"I[{i}]", "O", TimingValue(18000))
-    dff = ch.timing.add_cell_variant(speed, "XC2000_DFF")
-    dff.add_setup_hold("CLK", "D", ClockEdge.RISING, TimingValue(8000), TimingValue(2000))
-    dff.add_clock_out("CLK", "Q", ClockEdge.RISING, TimingValue(10000))
+    tmg = ch.set_speed_grades(sorted(SPEED_GRADES))
+    for speed, s in SPEED_GRADES.items():
+        ps = lambda v: TimingValue(int(round(v * s)))  # noqa: E731
+        for name, delay, res, cap, buffered in (
+                ("SM", 300, R_SW, C_SEG, False), ("PIP", 200, R_SW, C_SEG, False),
+                ("INMUX", 1000, R_SW, 0, False), ("GCLK", T_GCLK, 0, 0, True),
+                ("XYDRV", 0, R_DRV, 0, True), ("LOCAL", 0, 0, 0, True)):
+            tmg.set_pip_class(grade=speed, name=name, delay=ps(delay), in_cap=TimingValue(cap),
+                              out_res=ps(res), is_buffered=buffered)
+        for name, cap in (("SEG", C_SEG), ("LONG", C_LONG), ("CLKNET", 0)):
+            tmg.set_node_class(grade=speed, name=name, delay=TimingValue(0), res=TimingValue(0),
+                               cap=TimingValue(cap))
+        lut3 = ch.timing.add_cell_variant(speed, "XC2000_LUT3")
+        for i in range(3):
+            lut3.add_comb_arc(f"I[{i}]", "O", ps(T_ILO))
+        lut4 = ch.timing.add_cell_variant(speed, "XC2000_LUT4")
+        for i in range(4):
+            lut4.add_comb_arc(f"I[{i}]", "O", ps(T_ILO4))
+        dff = ch.timing.add_cell_variant(speed, "XC2000_DFF")
+        dff.add_setup_hold("CLK", "D", ClockEdge.RISING, ps(T_ICK), TimingValue(0))
+        dff.add_clock_out("CLK", "Q", ClockEdge.RISING, ps(T_CKO))
 
 
 def main():
