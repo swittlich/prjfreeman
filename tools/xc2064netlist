@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+"""xc2064netlist: XC2064-Bitstream (.RBT/.BIT) -> Verilog-Netzliste aus XC2000_*-Zellen (xc2064db/netlist.py),
+für den formalen Vergleich mit dem RTL. Namen der Ports und Register aus der Textdatei von nextpnr.
+
+    xc2064netlist design.rbt --meta design.txt -o design.bit.v
+"""
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+from xc2064db import bitstream, config, netlist  # noqa: E402
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("bitstream", help=".RBT oder .BIT")
+    ap.add_argument("--meta", required=True, help="Textdatei von nextpnr (--vopt out=) mit den Zeilen port und reg")
+    ap.add_argument("-o", "--output", required=True, help="Verilog")
+    args = ap.parse_args()
+    db = config.Database()
+    ports, regs = netlist.read_meta(open(args.meta, encoding="utf-8").read())
+    try:
+        text = netlist.build(db, bitstream.read(args.bitstream).raw, ports, regs)
+    except ValueError as e:
+        sys.exit("xc2064netlist: %s" % e)
+    open(args.output, "w").write(text)
+    print("xc2064netlist: %s -> %s: %d Ports, %d Register" % (os.path.basename(args.bitstream),
+                                                              os.path.basename(args.output), len(ports), len(regs)),
+          file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

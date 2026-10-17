@@ -207,3 +207,12 @@ def iobs(lines, entries):
 
 def code(bits, raw):
     return sum(raw[b] << n for n, b in bits.items())
+
+
+def source_name(ent):
+    """Name einer Quelle des O- bzw. T-Mux im Textformat: Leitung, X/Y einer CLB oder GCLK"""
+    if ent.kind == "route":
+        return ent.line
+    if ent.kind in ("x", "y"):
+        return "%s.%s" % (ent.special, ent.kind.upper())
+    return ent.kind.upper()

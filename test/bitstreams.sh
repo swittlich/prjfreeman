@@ -5,6 +5,7 @@
 # Prüft:
 #   - python3 -m xc2064db: Gegenproben der Datenquellen (Bitkarte, Leitungen, Switch-Matrizen, CLB-Muxe)
 #   - xc2064unpack je Bitstream: jedes programmierte Bit und jeder Mux-Code steht in der Bitkarte
+#   - Rundlauf: xc2064pack macht aus dem Text wieder einen Bitstream, der bitgenau dem Original gleicht
 # Die Textdateien liegen danach unter build/flows/xc2064/test/bitstreams/.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARCH="$(dirname "$HERE")"
@@ -35,6 +36,16 @@ for f in "${files[@]}"; do
 	printf '  %-14s %s\n' "$name" "$(grep -m1 '^xc2064unpack: .*Probleme' "$OUT/${name%.*}.log" | sed 's/^xc2064unpack: [^:]*: //')"
 	if [[ $rc -ne 0 ]]; then
 		grep -v ' Probleme$' "$OUT/${name%.*}.log" | head -5 | sed 's/^/    /'
+		failed=$((failed + 1))
+		continue
+	fi
+	# Rundlauf: Text -> RBT, bitgenau gleich dem Original?
+	rc=0
+	python3 "$ARCH/tools/xc2064pack" "$OUT/${name%.*}.txt" -o "$OUT/${name%.*}.rt.rbt" --compare "$f" \
+		2>>"$OUT/${name%.*}.log" || rc=$?
+	printf '  %-14s Rundlauf mit xc2064pack: %s\n' "" "$(grep -m1 'Vergleich mit' "$OUT/${name%.*}.log" | sed 's/^.*: //')"
+	if [[ $rc -ne 0 ]]; then
+		tail -2 "$OUT/${name%.*}.log" | sed 's/^/    /'
 		failed=$((failed + 1))
 	fi
 done

@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <array>
 #include <fstream>
+#include <set>
 #include <sstream>
 
 #include "himbaechel_api.h"
@@ -75,6 +76,18 @@ constexpr uint8_t FF_CLK_OPTS = M(S_K) | M(S_C) | M(S_G);
 constexpr uint8_t FF_SET_OPTS = M(S_A) | M(S_F);
 constexpr uint8_t FF_RES_OPTS = M(S_D) | M(S_G);
 
+// Zusatzdaten eines Pips aus dem Graphen (xc2064_arch_gen.py, PipExtra): die Zeile im Textformat, die ihn
+// programmiert, und seine Art
+NPNR_PACKED_STRUCT(struct Xc2064PipExtraPOD {
+    int32_t cfg;  // IdString der Textzeile
+    int32_t kind; // PIP_CFG oder PIP_CLKBUF
+});
+enum PipKind
+{
+    PIP_CFG = 1,
+    PIP_CLKBUF = 2, // Eingang eines Taktpuffers: Code unbekannt, nur mit --vopt clkbuf
+};
+
 struct Xc2064Impl : HimbaechelAPI
 {
     ~Xc2064Impl() {};
@@ -83,7 +96,13 @@ struct Xc2064Impl : HimbaechelAPI
     {
         po::options_description specific("XC2064 specific options");
         specific.add_options()("pcf", po::value<std::string>(),
-                               "PCF file with pin constraints: set_io [-nowarn] <port> <pin> (PLCC68 pins P2..P68)");
+                               "PCF file with pin constraints: set_io [-nowarn] <port> <pin> (pins of the package, "
+                               "e.g. P9)");
+        specific.add_options()("package", po::value<std::string>(), "package: PC68 (default, 58 I/O) or PD48 (40 I/O)");
+        specific.add_options()("out", po::value<std::string>(),
+                               "write the configuration as text for xc2064pack (format: arch/xc2064/xc2064db/config.py)");
+        specific.add_options()("clkbuf", "use the clock buffers GCLK/ACLK (their input codes are unknown, so the "
+                                         "result cannot become a bitstream)");
         return specific;
     }
 
@@ -96,17 +115,34 @@ struct Xc2064Impl : HimbaechelAPI
         const std::string &dev = arch->args.device;
         auto dash = dev.find('-');
         arch->set_speed_grade(dash == std::string::npos ? "70" : dev.substr(dash + 1));
+        // Gehäuse (xc2064db/packages.py): die IOB-Bels heißen nach dem PLCC68-Pin, PCF und LOC nennen den Pin
+        // des gewählten Gehäuses
+        auto pkg = arch->args.options.find("package");
+        package = pkg == arch->args.options.end() ? "PC68" : pkg->second.as<std::string>();
+        if (package != "PC68" && package != "PD48")
+            log_error("Unbekanntes Gehäuse '%s' (PC68 oder PD48)\n", package.c_str());
+        arch->set_package(package);
     }
 
     void init(Context *ctx) override
     {
         h.init(ctx);
         HimbaechelAPI::init(ctx);
-        // Pads nach PLCC68-Pin (Bel-Name) und die beiden Taktpins
-        for (BelId bel : ctx->getBels())
-            if (ctx->getBelType(bel) == id_IOB)
-                pad_bels[ctx->getBelName(bel)[1]] = bel;
-        clock_pads = {pad_bels.at(ctx->id("P9")), pad_bels.at(ctx->id("P43"))};
+        // Pads nach Pin des Gehäuses, die bebondeten IOBs und die beiden Taktpins (Bel-Namen P9, P43)
+        for (BelId bel : ctx->getBels()) {
+            if (ctx->getBelType(bel) != id_IOB)
+                continue;
+            if (const PadInfoPOD *pad = ctx->get_bel_package_pin(bel)) {
+                pad_bels[IdString(pad->package_pin)] = bel;
+                bonded.insert(bel);
+            }
+            IdString name = ctx->getBelName(bel)[1];
+            if (name == ctx->id("P9"))
+                clock_pads[0] = bel;
+            else if (name == ctx->id("P43"))
+                clock_pads[1] = bel;
+        }
+        clkbuf = ctx->args.options.count("clkbuf") > 0;
     }
 
     // Das Routing des XC2064 ist knapp (4 Spuren je Kanal, 81 Kreuzungen): router2 löst Überlastung
@@ -168,8 +204,8 @@ struct Xc2064Impl : HimbaechelAPI
             const std::string &port_name = w[i], &pin_name = w[i + 1];
             IdString pin = ctx->id(pin_name);
             if (!pad_bels.count(pin))
-                log_error("%s:%d: '%s' ist kein XC2064-Pad (PLCC68: P2..P68)\n", file.c_str(), lineno,
-                          pin_name.c_str());
+                log_error("%s:%d: '%s' ist kein I/O-Pin des Gehäuses %s\n", file.c_str(), lineno, pin_name.c_str(),
+                          package.c_str());
             if (used.count(pin))
                 log_error("%s:%d: Pin %s ist schon '%s' zugeordnet\n", file.c_str(), lineno, pin_name.c_str(),
                           used.at(pin).c_str());
@@ -206,8 +242,8 @@ struct Xc2064Impl : HimbaechelAPI
                 continue;
             IdString pin = ctx->id(loc->second.as_string());
             if (!pad_bels.count(pin))
-                log_error("%s: LOC \"%s\" ist kein XC2064-Pad (PLCC68: P2..P68)\n", ci->name.c_str(ctx),
-                          pin.c_str(ctx));
+                log_error("%s: LOC \"%s\" ist kein I/O-Pin des Gehäuses %s\n", ci->name.c_str(ctx), pin.c_str(ctx),
+                          package.c_str());
             BelId bel = pad_bels.at(pin);
             if (!ctx->checkBelAvail(bel))
                 log_error("%s: Pad %s ist schon mit %s belegt\n", ci->name.c_str(ctx), pin.c_str(ctx),
@@ -250,7 +286,7 @@ struct Xc2064Impl : HimbaechelAPI
         auto next = clocks.begin();
         for (int c = 0; c < 2 && next != clocks.end(); c++) {
             BelId pad = clock_pads[c];
-            if (!ctx->checkBelAvail(pad))
+            if (!ctx->checkBelAvail(pad) || !bonded.count(pad))
                 continue;
             ctx->bindBel(pad, next->second->driver.cell, STRENGTH_FIXED);
             log_info("Clock '%s' (%s) placed at %s (%s).\n", ctx->nameOf(next->second),
@@ -405,15 +441,47 @@ struct Xc2064Impl : HimbaechelAPI
         fold_constant_tristate();
         fold_constants();
         bind_constrained_pads();
-        bind_clock_pads();
+        if (clkbuf_enabled())
+            bind_clock_pads();
         int moved = route_q_feedback_to_i2();
+        int unused = fold_unused_lut_inputs();
         // Das FF bekommt seine Daten nur aus F bzw. FG derselben CLB. synth_xc2064 sorgt dafür, dass
         // jedes FF einen eigenen LUT hat; LUT und FF werden hier als Cluster gemeinsam platziert.
         const pool<CellTypePort> ff_d{{id_XC2000_DFF, id_D}};
         int n3 = h.constrain_cell_pairs(pool<CellTypePort>{{id_XC2000_LUT3, id_O}}, ff_d, Z_FF - Z_F);
         int n4 = h.constrain_cell_pairs(pool<CellTypePort>{{id_XC2000_LUT4, id_O}}, ff_d, Z_FF - Z_FG);
-        log_info("Constrained %d LUT3/FF and %d LUT4/FF pairs, %d Q feedback inputs moved to I[2].\n", n3, n4,
-                 moved);
+        log_info("Constrained %d LUT3/FF and %d LUT4/FF pairs, %d Q feedback inputs moved to I[2], %d unused LUT "
+                 "inputs made don't-care.\n",
+                 n3, n4, moved, unused);
+    }
+
+    bool clkbuf_enabled() const { return clkbuf; }
+
+    // Ein unbelegter LUT-Eingang liest im Chip trotzdem eine Leitung (die Grundstellung seines Muxes): der
+    // LUT-Inhalt darf daher nicht von ihm abhängen. INIT übernimmt für beide Werte den Teil mit Eingang = 0.
+    int fold_unused_lut_inputs()
+    {
+        int n = 0;
+        for (auto &cell : ctx->cells) {
+            CellInfo *ci = cell.second.get();
+            int width = ci->type == id_XC2000_LUT3 ? 3 : ci->type == id_XC2000_LUT4 ? 4 : 0;
+            if (!width)
+                continue;
+            uint64_t init = uint64_t(ci->params.at(id_INIT).as_int64()), next = init;
+            for (int i = 0; i < width; i++) {
+                if (ci->getPort(lut_in(i)))
+                    continue;
+                uint64_t folded = 0;
+                for (int a = 0; a < (1 << width); a++)
+                    if ((next >> (a & ~(1 << i))) & 1)
+                        folded |= uint64_t(1) << a;
+                next = folded;
+                n++;
+            }
+            if (next != init)
+                ci->params[id_INIT] = Property(int64_t(next), 1 << width);
+        }
+        return n;
     }
 
     bool isBelLocationValid(BelId bel, bool explain_invalid) const override
@@ -447,13 +515,18 @@ struct Xc2064Impl : HimbaechelAPI
 
     bool isValidBelForCellType(IdString cell_type, BelId bel) const override
     {
-        return ctx->getBelType(bel) == bel_type_for(cell_type);
+        // ein IOB nur, wenn sein Pad im gewählten Gehäuse einen Pin hat
+        IdString t = ctx->getBelType(bel);
+        return t == bel_type_for(cell_type) && (t != id_IOB || bonded.count(bel));
     }
 
   private:
     HimbaechelHelpers h;
-    dict<IdString, BelId> pad_bels;
+    dict<IdString, BelId> pad_bels;  // Pin des Gehäuses -> IOB-Bel
+    pool<BelId> bonded;              // IOB-Bels mit Pin im Gehäuse
+    std::string package = "PC68";
     std::array<BelId, 2> clock_pads; // P9 (GCLK), P43 (ACLK)
+    bool clkbuf = false;             // --vopt clkbuf: Taktpuffer benutzen
     pool<IdString> clock_only_nets;  // Takte an P9/P43, die nur FF takten (preRoute)
     pool<PipId> pad_exit_pips;       // ... und die Pips von dort ins allgemeine Routing
 
@@ -528,7 +601,7 @@ struct Xc2064Impl : HimbaechelAPI
     bool is_global_clock(const NetInfo *net) const
     {
         const CellInfo *drv = net->driver.cell;
-        if (!is_pad_input(net))
+        if (!clkbuf_enabled() || !is_pad_input(net))
             return false;
         if (drv->bel != BelId())
             return drv->bel == clock_pads[0] || drv->bel == clock_pads[1];
@@ -606,8 +679,8 @@ struct Xc2064Impl : HimbaechelAPI
                 opts &= ~M(S_F);
             if (!g_out || net != g_out)
                 opts &= ~M(S_G);
-            if ((opts & M(S_K)) && !is_global_clock(net))
-                opts &= ~M(S_K);
+            // K kommt von GCLK oder von der senkrechten long.2 der Spalte, die jedes Netz erreichen kann
+            // (so taktet XACT in COUNTER.BIT); zwei Takte in einer Spalte muss der Router über C lösen
             reqs.push_back({net, opts});
         };
         for (const CellInfo *c : {f, g})
@@ -655,7 +728,9 @@ struct Xc2064Impl : HimbaechelAPI
         // über das allgemeine Routing.
         clock_only_nets.clear();
         pad_exit_pips.clear();
-        for (BelId pad : clock_pads) {
+        for (BelId pad : clkbuf_enabled() ? clock_pads : std::array<BelId, 2>{}) {
+            if (pad == BelId())
+                continue;
             const CellInfo *ci = ctx->getBoundBelCell(pad);
             const NetInfo *net = ci ? ci->getPort(id_O) : nullptr;
             if (!net || net->users.entries() == 0)
@@ -677,7 +752,151 @@ struct Xc2064Impl : HimbaechelAPI
 
     bool checkPipAvailForNet(PipId pip, const NetInfo *net) const override
     {
+        if (!checkPipAvail(pip))
+            return false;
         return !(net && pad_exit_pips.count(pip) && clock_only_nets.count(net->name));
+    }
+
+    // Die Eingänge der Taktpuffer gibt es nur mit --vopt clkbuf: ihr Code ist unbekannt, ein Design damit
+    // ließe sich nicht in einen Bitstream übersetzen
+    bool checkPipAvail(PipId pip) const override
+    {
+        if (clkbuf)
+            return true;
+        const Xc2064PipExtraPOD *x = pip_extra(pip);
+        return !(x && x->kind == PIP_CLKBUF);
+    }
+
+    const Xc2064PipExtraPOD *pip_extra(PipId pip) const
+    {
+        const auto &p = chip_pip_info(ctx->chip_info, pip);
+        return p.extra_data.is_null() ? nullptr : reinterpret_cast<const Xc2064PipExtraPOD *>(p.extra_data.get());
+    }
+
+    // --- Konfiguration als Text (--vopt out=, für xc2064pack) --------------------------------------
+    // Format: arch/xc2064/xc2064db/config.py. Die Pips des Routings tragen ihre Zeile aus dem Graphen in den
+    // Zusatzdaten; CLBs und IOBs ergeben sich aus den Zellen und den Pips innerhalb der CLB. Die Richtung
+    // der Repowering-Puffer leitet xc2064pack ab ("bidi auto"), der Rest steht im Grundzustand von XACT.
+    void postRoute() override
+    {
+        if (ctx->args.options.count("out"))
+            write_config(ctx->args.options.at("out").as<std::string>());
+    }
+
+    std::string tile_wire_name(int tile, int index) const
+    {
+        return IdString(chip_tile_info(ctx->chip_info, tile).wires[index].name).str(ctx);
+    }
+    // Name (in der Kachel des Pips) der Quelle, die den Draht w in seinem Netz treibt; "" ohne
+    std::string driver_name(WireId w) const
+    {
+        if (w == WireId())
+            return "";
+        const NetInfo *net = ctx->getBoundWireNet(w);
+        if (!net)
+            return "";
+        auto it = net->wires.find(w);
+        if (it == net->wires.end() || it->second.pip == PipId())
+            return "";
+        PipId pip = it->second.pip;
+        return tile_wire_name(pip.tile, chip_pip_info(ctx->chip_info, pip).src_wire);
+    }
+    std::string pin_driver(int x, int y, int z, IdString pin) const
+    {
+        BelId bel = ctx->getBelByLocation(Loc(x, y, z));
+        return driver_name(ctx->getBelPinWire(bel, pin));
+    }
+
+    // Zeile "clb" einer CLB (Felder: xc2064db/blocks.py), "" wenn die CLB unbenutzt ist
+    std::string clb_config(int x, int y) const
+    {
+        const CellInfo *f = cell_at(x, y, Z_F), *g = cell_at(x, y, Z_G), *fg = cell_at(x, y, Z_FG);
+        const CellInfo *ff = cell_at(x, y, Z_FF);
+        Loc loc(x, y, 0);
+        std::string xs = driver_name(tile_wire(loc, GFX_WIRE_X)), ys = driver_name(tile_wire(loc, GFX_WIRE_Y));
+        if (!f && !g && !fg && !ff && xs.empty() && ys.empty())
+            return "";
+        auto out_name = [](const std::string &s) { return s == "G_O" ? "G" : s == "Q" || s.empty() ? "Q" : "F"; };
+        auto inputs = [&](int z) {
+            static const char *def[3] = {"B", "C", "Q"};
+            std::string r;
+            for (int i = 0; i < 3; i++) {
+                std::string s = pin_driver(x, y, z, lut_in(i));
+                r += (i ? ":" : "") + (s.empty() ? std::string(def[i]) : s);
+            }
+            return r;
+        };
+        auto init = [](const CellInfo *c) { return c ? uint64_t(c->params.at(id_INIT).as_int64()) : uint64_t(0); };
+        std::string fin = fg ? inputs(Z_FG) : inputs(Z_F), gin = fg ? fin : inputs(Z_G);
+        unsigned lutf = fg ? (init(fg) >> 8) & 0xFF : init(f) & 0xFF, lutg = fg ? init(fg) & 0xFF : init(g) & 0xFF;
+        std::string q = "LATCH", clk, set, res;
+        if (ff) {
+            auto param = [&](const char *p) {
+                auto it = ff->params.find(ctx->id(p));
+                return it != ff->params.end() && it->second.as_int64() != 0;
+            };
+            q = param("LATCH") ? "LATCH" : "FF";
+            std::string c = pin_driver(x, y, Z_FF, id_CLK);
+            if (!c.empty())
+                clk = std::string(c == "K" ? "K" : c == "C" ? "C" : "G") + (param("CLKINV") ? ":NOT" : "");
+            std::string s = pin_driver(x, y, Z_FF, id_S), r = pin_driver(x, y, Z_FF, id_R);
+            set = s.empty() ? "" : s == "A" ? "A" : "F";
+            res = r.empty() ? "" : r == "D" ? "D" : "G";
+        }
+        return stringf("BASE:%s F:%s G:%s LUTF:%02X LUTG:%02X X:%s Y:%s Q:%s SET:%s RES:%s CLK:%s", fg ? "F" : "FG",
+                       fin.c_str(), gin.c_str(), lutf, lutg, out_name(xs), out_name(ys), q.c_str(), set.c_str(),
+                       res.c_str(), clk.c_str());
+    }
+
+    void write_config(const std::string &file)
+    {
+        std::ofstream out(file);
+        if (!out)
+            log_error("Kann '%s' nicht schreiben\n", file.c_str());
+        out << "# XC2064-Konfiguration aus nextpnr-himbaechel (arch/xc2064, Format: xc2064db/config.py)\n";
+        out << "device XC2064\npackage " << package << "\nbidi auto\n";
+        std::vector<std::string> lines;
+        for (BelId bel : ctx->getBels()) { // IOBs: Port, Eingang direkt, Modus des Ausgangstreibers
+            const CellInfo *ci = ctx->getBoundBelCell(bel);
+            if (!ci || ctx->getBelType(bel) != id_IOB)
+                continue;
+            std::string pin = ctx->getBelName(bel)[1].str(ctx);
+            const NetInfo *pad = ci->getPort(id_PAD);
+            const char *dir = ci->type == id_XC2000_INBUF    ? "input"
+                              : ci->type == id_XC2000_IOBUF ? "inout"
+                                                            : "output";
+            if (pad)
+                lines.push_back(stringf("port %s %s %s", pin.c_str(), pad->name.c_str(ctx), dir));
+            lines.push_back("iob " + pin + " I:PAD");
+            if (ci->type == id_XC2000_INBUF)
+                lines.push_back("mux " + pin + ".T off");
+            else if (ci->type == id_XC2000_OUTBUF)
+                lines.push_back("mux " + pin + ".T on");
+        }
+        for (int y = 1; y <= 8; y++)
+            for (int x = 1; x <= 8; x++) {
+                std::string c = clb_config(x, y);
+                if (!c.empty())
+                    lines.push_back(stringf("clb %c%c %s", 'A' + y - 1, 'A' + x - 1, c.c_str()));
+                const CellInfo *ff = cell_at(x, y, Z_FF);
+                const NetInfo *q = ff ? ff->getPort(id_Q) : nullptr;
+                if (q) // Name des Registers für den Rückweg (xc2064netlist)
+                    lines.push_back(stringf("reg %c%c %s", 'A' + y - 1, 'A' + x - 1, q->name.c_str(ctx)));
+            }
+        std::set<std::string> routing; // Pips des Routings (beide Richtungen eines Schalters: eine Zeile)
+        for (auto &n : ctx->nets)
+            for (auto &w : n.second->wires) {
+                PipId pip = w.second.pip;
+                const Xc2064PipExtraPOD *x = pip == PipId() ? nullptr : pip_extra(pip);
+                if (x)
+                    routing.insert(IdString(x->cfg).str(ctx));
+            }
+        for (auto &l : lines)
+            out << l << "\n";
+        for (auto &l : routing)
+            out << l << "\n";
+        log_info("Wrote configuration for xc2064pack to %s (%d lines).\n", file.c_str(),
+                 int(lines.size() + routing.size()));
     }
 
     // --- GUI: Schaltplan ----------------------------------------------------------------------

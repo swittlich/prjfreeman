@@ -298,7 +298,7 @@ class Graph:
                         self.unmodelled.append((pin, ent.spec, "Quelle des %s-Mux" % which))
                         continue
                     self.conns.append(Conn("iob" + which.lower(), src, "%s.%s" % (pin, which), bitl, code,
-                                           "%s.%s %s" % (pin, which, ent.spec)))
+                                           "%s.%s %s" % (pin, which, iobmux.source_name(ent))))
             for ent in iob.i:
                 if ent.kind == "clb":
                     self.pad_of_clb[(ent.special, iob.style[0].upper())] = pin
@@ -309,6 +309,16 @@ class Graph:
                     continue
                 self.conns.append(Conn("iobi", "%s.I" % pin, self.route_node(ent), [bit], None,
                                        "%s:%s" % (ent.col, ent.row)))
+
+    def cfg(self, cn):
+        """Zeile im Textformat (config.py), die diese Verbindung programmiert; None für die Puffer (bidi)"""
+        if cn.kind in ("pip", "out", "junction", "iobi"):
+            return "pip " + self.lines.pip_name(self.entries[cn.bits[0]].key[0])
+        if cn.kind == "switch":
+            return "switch " + cn.name
+        if cn.kind in ("mux", "iobo", "iobt", "clkbuf"):
+            return "mux " + cn.name
+        return None
 
     def _route_ok(self, ent):
         kind, letter, rest = _split(ent.line)
@@ -386,10 +396,24 @@ class Graph:
 
     # --- Prüfung der Puffer-Richtung -----------------------------------------------------------
     def bidi_check(self, raw):
-        """Richtung der Repowering-Puffer in einem Bitstream (nur im Prüfmodus split_bidi). Je Puffer: ohne ihn
-        die beiden Seiten des Netzes; liegt der Treiber (X/Y, Pnn.I) auf einer Seite und eine Senke
-        (CLB-Eingang, Pnn.O/T) auf der anderen, muss das Bit dem Code dieser Richtung entsprechen.
+        """Richtung der Repowering-Puffer in einem Bitstream (nur im Prüfmodus split_bidi): je benutzten Puffer
+        muss das Bit dem Code der Richtung entsprechen, in der das Signal läuft (bidi_directions).
         Ergebnis: Zähler passend, Liste der Widersprüche (Name, Bit, Richtung)."""
+        ok, bad = 0, []
+        for down, code in self.bidi_directions(raw):
+            if code is None:
+                continue
+            if raw[down.bits[0]] == code:
+                ok += 1
+            else:
+                bad.append((down.name, raw[down.bits[0]], "nach unten/rechts" if code == down.code else "nach oben/links"))
+        return ok, bad
+
+    def bidi_directions(self, raw):
+        """Je Puffer (nur split_bidi): (Verbindung nach unten/rechts, Code der Richtung des Signals oder None).
+        Ohne den Puffer zerfällt sein Netz in zwei Seiten; liegt der Treiber (X/Y, Pnn.I) auf einer Seite und
+        eine Senke (CLB-Eingang, Pnn.O/T) auf der anderen, läuft das Signal von dort nach hier. None: eine
+        Seite unbenutzt (Richtung beliebig). Treiber auf beiden Seiten: ValueError."""
         assert self.split_bidi
         edges, bufs = [], {}
         for cn in self.conns:
@@ -405,7 +429,7 @@ class Graph:
         def is_sink(n):
             return re.fullmatch(r"[A-H][A-H]\.[ABCDK]|P\d+\.[OT]", n)
 
-        ok, bad = 0, []
+        out = []
         for name, (down, up) in sorted(bufs.items()):
             parent = {}
 
@@ -418,21 +442,20 @@ class Graph:
             for a, b in edges + [e for e in all_buf if e != (down.a, down.b)]:
                 parent[find(a)] = find(b)
             if find(down.a) == find(down.b):
-                continue  # Ring über einen anderen Weg (kommt in den Bitstreams nicht vor)
+                out.append((down, None))  # Ring über einen anderen Weg (kommt in den Bitstreams nicht vor)
+                continue
             sides = [[n for n in parent if find(n) == find(x)] for x in (down.a, down.b)]
             drv = [any(is_driver(n) for n in s) for s in sides]
             snk = [any(is_sink(n) for n in s) for s in sides]
-            if drv[0] and snk[1] and not drv[1]:
-                code = down.code
-            elif drv[1] and snk[0] and not drv[0]:
-                code = up.code
+            if drv[0] and drv[1]:
+                raise ValueError("Puffer %s: Treiber auf beiden Seiten" % name)
+            if drv[0] and snk[1]:
+                out.append((down, down.code))
+            elif drv[1] and snk[0]:
+                out.append((down, up.code))
             else:
-                continue  # eine Seite unbenutzt: Richtung beliebig
-            if raw[down.bits[0]] == code:
-                ok += 1
-            else:
-                bad.append((name, raw[down.bits[0]], "nach unten/rechts" if code == down.code else "nach oben/links"))
-        return ok, bad
+                out.append((down, None))  # eine Seite unbenutzt: Richtung beliebig
+        return out
 
     # --- Abfragen ------------------------------------------------------------------------------
     def nodes(self):

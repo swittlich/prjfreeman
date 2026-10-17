@@ -78,3 +78,27 @@ def read(path):
         bs = read_bit(data)
     assert len(bs.raw) == NBITS
     return bs
+
+
+def frames(raw):
+    """Kopf, 160 Rahmenzeilen und Ende als Zeilen aus 0/1"""
+    assert len(raw) == NBITS
+    rows = ["0" + "".join(str(b) for b in raw[f * FRAME_BITS:(f + 1) * FRAME_BITS]) + "111" for f in range(FRAMES)]
+    return [PREAMBLE] + rows + [POSTAMBLE]
+
+
+def write_rbt(raw, design, part, when=None):
+    """RBT-Text genau im Aufbau von XACT (CRLF, 7 Textzeilen, Kopf, Rahmen, 11111111); part z. B. 2064PC68"""
+    import time
+    stamp = time.asctime(when or time.localtime())
+    head = ["Xilinx LCA %s.LCA %s" % (design.upper(), part), "File %s.rbt" % design, stamp, stamp, "Source",
+            "Version", "Produced by xc2064pack (arch/xc2064)"]
+    return "\r\n".join(head + frames(raw)) + "\r\n"
+
+
+def write_bit(raw):
+    """BIT: Kopf, Rahmen und Ende als Bitfolge, auf ganze Bytes mit 1 aufgefüllt (XACTs .BIT hängt noch
+    Füllbytes ohne Bedeutung an, die das Lesen ignoriert)"""
+    bits = "".join(frames(raw))
+    bits += "1" * (-len(bits) % 8)
+    return bytes(int(bits[i:i + 8], 2) for i in range(0, len(bits), 8))

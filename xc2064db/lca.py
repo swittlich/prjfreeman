@@ -1,8 +1,10 @@
 """TEST1.LCA (XACT 5.1.0) als Gegenprobe für TEST1.RBT: XACT listet je Netz die Pins (Addnet) und alle
-programmierten Elemente (NProgram) mit eigenen Namen. Daraus zwei Prüfungen:
+programmierten Elemente (NProgram) mit eigenen Namen, je Block (Editblk) Base, Config und die Gleichungen
+der Funktionsgeneratoren (Equate). Daraus drei Prüfungen:
 
   elements()  jedes Element von XACT muss in der Dekodierung von TEST1.RBT stehen (Namen und Bitkarte)
   nets()      der Routing-Graph muss die CLB-Pins jedes Netzes verbinden und verschiedene Netze trennen
+  blocks()    Config und Equate jedes Blocks müssen zur Dekodierung passen (blocks.py)
 
 Namen bei XACT: "BD.8.2.0 BD.8.2.4" ist eine Verbindung der Switch-Matrix BD.8.2 (Pins ab 0, hier ab 1),
 "col.D.local.3:AD.B" die Quelle des CLB-Eingangs AD.B, "col.D.local.4:BC.X" ein Ausgangs-Pip,
@@ -141,3 +143,60 @@ def check_nets(nets, graph, raw, skip=()):
         else:
             r[2] = "ohne CLB-Pins"
     return result
+
+
+def parse_blocks(path=None):
+    """{Block: {"base": ..., "config": {Feld: Wert}, "equate": [(F/G, Gleichung)]}} (CLBs und IOBs)"""
+    text = sources.read_text(path or sources.TEST1_RBT.replace(".RBT", ".LCA"))
+    out = {}
+    for name, body in re.findall(r"Editblk (\S+)\n(.*?)Endblk", text, re.S):
+        cfg = re.search(r"Config (.*)", body)
+        out[name] = {"base": (re.findall(r"Base (\S+)", body) or [""])[-1],
+                     "config": {k: v for k, _, v in (t.partition(":") for t in cfg.group(1).split())} if cfg else {},
+                     "equate": re.findall(r"Equate (\w) = (.*)", body)}
+    return out
+
+
+def _eval(eq, env):
+    py = eq.replace("~", " not ").replace("*", " and ").replace("+", " or ").replace("@", " ^ ")
+    return int(bool(eval(py, {"__builtins__": {}}, dict(env))))
+
+
+def check_blocks(lca_blocks, items):
+    """Abweichungen der dekodierten Blöcke (Items clb/iob/mux aus config.decode) von Config und Equate:
+    Liste (Block, Text). Leere Felder bei XACT (unbenutzt) zählen nicht; XACT nennt bei F/G nur die
+    benutzten Eingänge, die müssen unter den gewählten sein."""
+    from . import blocks as blocks_mod
+    clb = {it.name: blocks_mod.parse_fields(it.value) for it in items if it.kind == "clb"}
+    iob = {it.name: blocks_mod.parse_fields(it.value) for it in items if it.kind == "iob"}
+    tmux = {it.name[:-2]: it.value for it in items if it.kind == "mux" and it.name.endswith(".T")}
+    bad = []
+    for name, b in lca_blocks.items():
+        if b["base"] == "IO":
+            pin = "P%d" % int(name[1:]) if re.fullmatch(r"P\d+", name) else name
+            got = {"I": iob[pin]["I"], "BUF": {"on": "ON", "off": ""}.get(tmux[pin], "TRI")}
+            for k, v in b["config"].items():
+                if v and got.get(k) != v:
+                    bad.append((name, "%s:%s, dekodiert %s" % (k, v, got.get(k))))
+            continue
+        f = clb[name]
+        if b["base"] != f["BASE"]:
+            bad.append((name, "Base %s, dekodiert %s" % (b["base"], f["BASE"])))
+        for k in ("X", "Y", "Q", "SET", "RES", "CLK"):
+            v = b["config"].get(k, "")
+            if (v or k in ("SET", "RES", "CLK")) and v != f[k]:
+                bad.append((name, "%s:%s, dekodiert %s" % (k, v, f[k])))
+        for lut, eq in b["equate"]:
+            ins = f[lut].split(":")
+            table = int(f["LUT" + lut], 16)
+            if f["BASE"] == "F":  # 4 Variablen, B = 1: Tabelle F
+                table, ins = int(f["LUTF"], 16) << 8 | int(f["LUTG"], 16), ins + ["B"]
+            for i in range(1 << len(ins)):
+                vals = [(v, (i >> k) & 1) for k, v in enumerate(ins)]
+                if any(a == c and x != y for a, x in vals for c, y in vals):
+                    continue  # derselbe Eingang zweimal: Kombination kommt nicht vor
+                env = dict({v: 0 for v in "ABCDQ"}, **dict(vals))
+                if _eval(eq, env) != (table >> i) & 1:
+                    bad.append((name, "%s = %s stimmt nicht mit LUT%s %s (%s)" % (lut, eq, lut, f["LUT" + lut], f[lut])))
+                    break
+    return bad

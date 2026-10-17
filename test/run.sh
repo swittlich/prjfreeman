@@ -8,6 +8,9 @@
 #          Tristate auch im hochohmigen Zustand und auf dem Lesepfad von inout (tristate_split.py)
 #   Pips   die nur aus Bels und benutzten Pips zurückgewonnene Netzliste (extract_netlist.py) ist stimmig
 #          und äquivalent zum RTL. Das deckt Platzierung und Routing mit ab
+#   Bitstream  Rundlauf über den Bitstream: nextpnr schreibt die Konfiguration als Text (--vopt out=),
+#          xc2064pack macht daraus eine RBT-Datei, xc2064unpack und xc2064pack geben sie bitgenau wieder,
+#          und die allein aus dem Bitstream zurückgewonnene Netzliste (xc2064netlist) ist äquivalent zum RTL
 #   Fmax   kleinste Frequenz aller Takte nach dem Routing, mit FMIN=… (MHz) ist ein Wert darunter ein Fehler
 #   Routing  Iterationen und Laufzeit von router2 (nur Information)
 # Umgebungsvariablen: SEEDS="1 2 3 4 5 6" (zusätzlich zum nextpnr-Standard), FREQ=5, FMIN=…, TIMEOUT=300,
@@ -86,8 +89,17 @@ make -s -C "$ARCH/yosys"
 mkdir -p "$OUT"
 runs=0
 failed=0
-row() { printf '%-10s %-5s %-8s %-8s %-6s %-6s %-11s %s\n' "$@"; }
-row Design PCF Seed PnR Netz Pips Fmax Routing
+row() { printf '%-10s %-5s %-8s %-8s %-6s %-6s %-10s %-11s %s\n' "$@"; }
+row Design PCF Seed PnR Netz Pips Bitstream Fmax Routing
+# bitstream <run>: Text -> RBT -> (unpack -> pack bitgenau) -> Netzliste -> Vergleich mit dem RTL
+bitstream() {
+	local t="$ARCH/tools"
+	python3 "$t/xc2064pack" "$1.cfg.txt" -o "$1.rbt" 2>"$1.bitstream.log" &&
+		python3 "$t/xc2064unpack" "$1.rbt" -o "$1.unpacked.txt" 2>>"$1.bitstream.log" &&
+		python3 "$t/xc2064pack" "$1.unpacked.txt" -o "$1.rt.rbt" --compare "$1.rbt" 2>>"$1.bitstream.log" &&
+		python3 "$t/xc2064netlist" "$1.rbt" --meta "$1.cfg.txt" -o "$1.bit.v" 2>>"$1.bitstream.log" &&
+		gate_json "read_verilog $1.bit.v" "$1.bit.json" && equiv "$gold" "$1.bit.json"
+}
 
 for d in "${designs[@]}"; do
 	d="$(realpath "$d")"
@@ -121,8 +133,8 @@ for d in "${designs[@]}"; do
 			rc=0
 			XC2064_EXTRACT="$run.extracted.v" timeout "$TIMEOUT" "$NEXTPNR" --device XC2064 --json "$dir/$name.json" \
 				--write "$run.pnr.json" -l "$run.nextpnr.log" --freq "${FREQ:-5}" --timing-allow-fail \
-				--post-route "$HERE/extract_netlist.py" "${opts[@]}" >"$run.out" 2>&1 || rc=$?
-			pnr=ok net=- pips=- f=
+				--vopt "out=$run.cfg.txt" --post-route "$HERE/extract_netlist.py" "${opts[@]}" >"$run.out" 2>&1 || rc=$?
+			pnr=ok net=- pips=- bit=- f=
 			if [[ $rc -eq 124 ]]; then
 				pnr=Timeout
 			elif [[ $rc -ne 0 ]]; then
@@ -137,9 +149,11 @@ for d in "${designs[@]}"; do
 					{ gate_json "read_verilog $run.extracted.v" "$run.pips.json" && equiv "$gold" "$run.pips.json"; } ||
 						pips=FEHLER
 				}
+				bit=ok
+				bitstream "$run" || bit=FEHLER
 			fi
 			bad=0
-			[[ $pnr == ok && $net == ok && $pips == ok ]] || bad=1
+			[[ $pnr == ok && $net == ok && $pips == ok && $bit == ok ]] || bad=1
 			if [[ -n "${FMIN:-}" && -n "$f" ]] && awk -v f="$f" -v m="$FMIN" 'BEGIN { exit !(f < m) }'; then
 				f="$f<$FMIN"
 				bad=1
@@ -147,7 +161,7 @@ for d in "${designs[@]}"; do
 			# router2: Iterationen und Zeit (viele Iterationen = Netze wechseln sich an einem Draht ab)
 			it="$(grep -o 'iter=[0-9]*' "$run.nextpnr.log" 2>/dev/null | tail -1 | cut -d= -f2 || true)"
 			t="$(grep -o 'Router2 time [0-9.]*' "$run.nextpnr.log" 2>/dev/null | awk '{ printf "%.0f", $3 }' || true)"
-			row "$name" "$m" "$s" "$pnr" "$net" "$pips" "${f:+$f MHz}" "${it:+$it It. ${t:-?} s}"
+			row "$name" "$m" "$s" "$pnr" "$net" "$pips" "$bit" "${f:+$f MHz}" "${it:+$it It. ${t:-?} s}"
 			runs=$((runs + 1))
 			failed=$((failed + bad))
 		done

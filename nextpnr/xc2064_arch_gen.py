@@ -45,6 +45,7 @@ from himbaechel_dbgen.chip import *
 ARCH_DIR = path.dirname(path.dirname(path.realpath(__file__)))
 sys.path.insert(0, ARCH_DIR)
 from xc2064db.graph import Graph  # noqa: E402
+from xc2064db import packages  # noqa: E402
 
 N_CLB = 8
 X = N_CLB + 2
@@ -193,12 +194,32 @@ def node_class(node):
     return ("LONG" if m[2] == "long" else "SEG") if m else ""
 
 
+PIP_CFG, PIP_CLKBUF = 1, 2  # Art der Zusatzdaten eines Pips
+
+
+@dataclass
+class PipExtra(BBAStruct):
+    """Zusatzdaten eines Pips aus dem Graphen: die Zeile im Textformat (xc2064db/config.py), die ihn
+    programmiert (nextpnr --vopt out=), und die Art (Taktpuffer-Eingang: Code unbekannt, nur mit
+    --vopt clkbuf benutzbar)"""
+    cfg: IdString
+    kind: int
+
+    def serialise_lists(self, context: str, bba: BBAWriter):
+        pass
+
+    def serialise(self, context: str, bba: BBAWriter):
+        bba.u32(self.cfg.index)
+        bba.u32(self.kind)
+
+
 class Builder:
     def __init__(self, ch):
         self.ch = ch
         self.graph = Graph()
         self.wires = {}  # (x, y) -> {Name: Typ}
         self.pips = {}  # (x, y) -> {(src, dst): Klasse}
+        self.pip_cfg = {}  # (x, y, src, dst) -> (Textzeile, Art)
         self.node_wires = {}  # Knoten -> [(x, y, Name)]
 
     def wire(self, xy, name, typ):
@@ -230,9 +251,12 @@ class Builder:
                 self.wire(xy, w, "ROUTING")
                 self.node(n, xy, w)
             cls = timing_class(cn)
+            cfg = (self.graph.cfg(cn), PIP_CLKBUF if cn.kind == "clkbuf" else PIP_CFG)
             self.pip(xy, a, b, cls)
+            self.pip_cfg[xy + (a, b)] = cfg
             if cn.kind in ("pip", "switch", "junction"):  # Pass-Transistor: beide Richtungen
                 self.pip(xy, b, a, cls)
+                self.pip_cfg[xy + (b, a)] = cfg
 
     @staticmethod
     def direct_xy(cn):
@@ -313,7 +337,10 @@ class Builder:
                     for pin, w, d in pins:
                         tt.add_bel_pin(bel, pin, w, d)
                 for (src, dst), cls in sorted(self.pips.get(xy, {}).items()):
-                    tt.create_pip(src, dst, timing_class=cls)
+                    pp = tt.create_pip(src, dst, timing_class=cls)
+                    cfg = self.pip_cfg.get(xy + (src, dst))
+                    if cfg:
+                        pp.extra_data = PipExtra(ch.strs.id(cfg[0]), cfg[1])
                 if has_sm(x, y) and not (x in (1, LAST) and y in (1, LAST)):  # zuerst: Index = Matrix 8.1/8.2
                     tt.create_group("SM0", "SWITCHBOX")
                     tt.create_group("SM1", "SWITCHBOX")
@@ -395,12 +422,23 @@ def set_timings(ch: Chip):
                 v.add_comb_arc(a, b, tv(c[k]))
 
 
+def set_packages(ch: Chip):
+    """Gehäuse PC68 und PD48 (xc2064db.packages): Pin-Name im Gehäuse -> IOB-Bel"""
+    by_pin = {p["pin"]: p for p in PAD_INFO}
+    for package in ("PC68", "PD48"):
+        pkg = ch.create_package(package)
+        for pin, pad in packages.pads(package, list(by_pin)).items():
+            p = by_pin[pad]
+            pkg.create_pad(pin, "X%dY%d" % (p["x"], p["y"]), pad, "IO", 0)
+
+
 def main():
     ch = Chip("xc2064", "XC2064", X, Y)
     ch.strs.read_constids(path.join(path.dirname(__file__), "constids.inc"))
     ch.read_gfxids(path.join(path.dirname(__file__), "gfxids.inc"))
     Builder(ch).build()
     set_timings(ch)
+    set_packages(ch)
     ch.write_bba(sys.argv[1])
 
 

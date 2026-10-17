@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""xc2064pack: Konfiguration als Text (Format siehe xc2064db/config.py, von nextpnr mit --vopt out= oder von
+xc2064unpack) -> XC2064-Bitstream als .RBT (genau im Aufbau von XACT) oder .BIT.
+
+    xc2064pack design.txt -o design.rbt [--package PC68|PD48] [--design NAME]
+
+Was der Text nicht festlegt, steht im Grundzustand von XACT (unbenutzte CLBs und IOBs, Optionen). Die Richtung
+der Repowering-Puffer leitet das Werkzeug aus dem Routing ab, wenn der Text keine bidi-Zeilen hat oder
+"bidi auto" enthält. Endet mit Fehler bei unbekannten Namen oder Codes, bei einem Taktpuffer-Eingang (Code
+unbekannt) und wenn sich der Bitstream nicht wieder fehlerfrei dekodieren lässt.
+"""
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+from xc2064db import bitstream, config, graph  # noqa: E402
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("text", help="Konfiguration als Text")
+    ap.add_argument("-o", "--output", required=True, help=".rbt oder .bit")
+    ap.add_argument("--package", help="Gehäuse für den RBT-Kopf (Standard: aus der Textdatei, sonst PC68)")
+    ap.add_argument("--design", help="Name im RBT-Kopf (Standard: Name der Ausgabedatei)")
+    ap.add_argument("--compare", metavar="BITSTREAM", help="Ergebnis bitgenau mit diesem Bitstream vergleichen")
+    args = ap.parse_args()
+
+    db = config.Database()
+    lines = config.parse_text(open(args.text, encoding="utf-8").read())
+    try:
+        raw = config.encode(db, lines)
+    except ValueError as e:
+        sys.exit("xc2064pack: %s" % e)
+    bidi = [l for l in lines if l.kind == "bidi"]
+    auto = not bidi or any(l.name == "auto" for l in bidi)
+    if auto:  # Richtung der Puffer aus dem Routing
+        gs = graph.Graph(db.entries, db.lines, split_bidi=True)
+        try:
+            for down, code in gs.bidi_directions(raw):
+                if code is not None:
+                    raw[down.bits[0]] = code
+        except ValueError as e:
+            sys.exit("xc2064pack: %s" % e)
+    n_bidi = sum(1 - raw[b] for b in db.bidi_bit.values())
+    items, problems = config.decode(db, raw)
+    if problems:
+        sys.exit("xc2064pack: der Bitstream lässt sich nicht fehlerfrei dekodieren: %s" % "; ".join(problems[:5]))
+
+    package = args.package or next((l.name for l in lines if l.kind == "package"), "PC68")
+    design = args.design or os.path.splitext(os.path.basename(args.output))[0]
+    if args.output.upper().endswith(".BIT"):
+        open(args.output, "wb").write(bitstream.write_bit(raw))
+    else:
+        open(args.output, "w", newline="").write(bitstream.write_rbt(raw, design, "2064" + package.upper()))
+    print("xc2064pack: %s -> %s: %d programmierte Bits, %d Puffer nach unten/rechts%s" % (
+        os.path.basename(args.text), os.path.basename(args.output), raw.count(0), n_bidi,
+        " (aus dem Routing)" if auto else ""), file=sys.stderr)
+    if args.compare:
+        ref = bitstream.read(args.compare).raw
+        diff = [i for i in range(len(ref)) if ref[i] != raw[i]]
+        print("xc2064pack: Vergleich mit %s: %s" % (os.path.basename(args.compare), "bitgenau" if not diff else
+              "%d Bits verschieden, z. B. %s" % (len(diff), ", ".join(db.entries[i].text for i in diff[:3]))),
+              file=sys.stderr)
+        if diff:
+            sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

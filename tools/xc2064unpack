@@ -34,7 +34,7 @@ def main():
     zeros = sum(1 for b in bs.raw if b == 0)
     print("xc2064unpack: %s: %d programmierte Bits; %s; %d Probleme" % (
         os.path.basename(args.bitstream), zeros, ", ".join("%d %s" % (count[k], k) for k in
-                                                          ("mux", "pip", "switch", "bidi", "bit")),
+                                                          ("mux", "pip", "switch", "bidi", "clb", "iob", "bit")),
         len(problems)), file=sys.stderr)
     # Routing-Graph des Modells (xc2064db.graph): welche programmierten Pips und Switch-Verbindungen er kennt
     by_bit = graph.Graph(db.entries, db.lines).by_bit()
