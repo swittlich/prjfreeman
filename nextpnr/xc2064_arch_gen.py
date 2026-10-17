@@ -4,7 +4,7 @@
 # Submodule shirriff-xc2064) mit der Bitkarte XC2064-def.txt, den Leitungsnamen (draw.js), den
 # CLB-Eingangs-Muxen (clb.js) und den IOB-Muxen (iob.js). Das Paket xc2064db (arch/xc2064/xc2064db) liest
 # diese Daten; der Routing-Graph entsteht aus xc2064db.graph, jeder Pip dort entspricht einem Bit bzw.
-# einem Mux-Code des Originals (Ausnahme: die Eingänge der Taktpuffer, deren Codes niemand kennt).
+# einem Mux-Code des Originals.
 #
 # Raster (x, y; y nach unten): 8x8 CLBs bei x, y = 1..8 und ein IO-Ring bei 0 bzw. 9. Shirriffs 9x9
 # Kacheln AA..II (Zeile, Spalte) entsprechen x = Spalte, y = Zeile = 1..9: jede enthält die Kanäle
@@ -33,7 +33,8 @@
 #                     beider Kanäle am Pad und fest an die Eingänge der Rand-CLB
 #                     Takteingang K (gelatchter Eingang) fest an der Taktleitung IOCLK der Seite, die ein
 #                     K-Mux an der Ecke aus dem Randkanal speist (oben/rechts in AI, unten/links in IA)
-#     Taktpuffer:     GCLK von P9, ACLK von P43 (Bits der Eingangs-Muxe CLK.AA.I/CLK.II.I, Code unbekannt)
+#     Taktpuffer:     Eingangs-Muxe CLK.AA.I (GCLK: P9, P11, 4 Randleitungen) und CLK.II.I (ACLK: P43, P46,
+#                     4 Randleitungen) mit Codes aus MAKEBITS; Pips der Leitungen in AA bzw. II, der Pads beim Pad
 #     Konstanten:     keine Leitung (wie im Original); pack() faltet sie in LUT-Inhalte oder setzt eine LUT ein
 #   Repowering-Puffer an den Sektionsgrenzen sind kein Pip: ein Puffer ist nie aus, seine Richtung folgt aus
 #   dem Routing (xc2064db.graph.bidi_bit).
@@ -119,6 +120,7 @@ def tile_name(x, y):
 
 PAD_BY_PIN = {p["pin"]: p for p in PAD_INFO}
 PAD_SIDE = {p[0]: p[2][0].upper() for p in PADS}  # T, B, L, R
+PAD_IN = {pin + ".I" for pin in PAD_BY_PIN}  # Eingänge der Pads (Knoten des Graphen)
 
 
 # --- Drahtnamen ---------------------------------------------------------------------------------
@@ -164,6 +166,8 @@ def place(cn):
     if cn.kind in ("iobo", "iobt"):  # IOB: in der Kachel des Pads
         p = PAD_BY_PIN[cn.b.split(".")[0]]
         return tile_name(p["x"], p["y"])
+    if cn.kind == "clkbuf" and cn.a not in PAD_IN:  # Taktpuffer aus einer Leitung: an seiner Ecke
+        return "AA" if cn.b == "GCLK" else "II"
     if cn.kind in ("iobi", "clkbuf"):
         p = PAD_BY_PIN[cn.a.split(".")[0]]
         return tile_name(p["x"], p["y"])
@@ -215,8 +219,7 @@ PIP_CFG, PIP_CLKBUF = 1, 2  # Art der Zusatzdaten eines Pips
 @dataclass
 class PipExtra(BBAStruct):
     """Zusatzdaten eines Pips aus dem Graphen: die Zeile im Textformat (xc2064db/config.py), die ihn
-    programmiert (nextpnr --vopt out=), und die Art (Taktpuffer-Eingang: Code unbekannt, nur mit
-    --vopt clkbuf benutzbar)"""
+    programmiert (nextpnr --vopt out=), und die Art (Taktpuffer-Eingang: nur mit --vopt clkbuf benutzbar)"""
     cfg: IdString
     kind: int
 

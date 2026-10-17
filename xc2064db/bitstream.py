@@ -13,6 +13,9 @@ Rahmen als eine Zeile, am Ende die Zeile 11111111. Davor stehen 7 Zeilen Text, z
     Produced by XACT version 5.1.0
 
 raw[i] ist Datenbit i % 71 von Rahmen i // 71, als 0/1 wie in der Datei (0 = programmiert).
+
+MAKEBITS 5.2.0 schreibt einen anderen Längenzähler in den Kopf und 16 statt 8 Einsen ans Ende. Das Lesen
+nimmt beides mit einem Hinweis an, geschrieben wird immer der Kopf von XACT 5.1.0.
 """
 import re
 
@@ -20,6 +23,7 @@ from .bitmap import FRAMES, FRAME_BITS, NBITS
 
 PREAMBLE = "1111111100100000000000101111000011011111"
 POSTAMBLE = "11111111"
+HEADER = re.compile(r"111111110010[01]{24}1111")  # Kopf mit beliebigem Längenzähler
 
 
 class Bitstream:
@@ -40,16 +44,22 @@ def _frames(bits, notes):
     return raw
 
 
+def _header_notes(header):
+    if header == PREAMBLE:
+        return []
+    return ["Längenzähler %d statt %d im Kopf (MAKEBITS 5.2.0?)" % (int(header[12:36], 2), int(PREAMBLE[12:36], 2))]
+
+
 def read_bit(data):
     bits = "".join(format(b, "08b") for b in data)
-    if not bits.startswith(PREAMBLE):
+    if not HEADER.fullmatch(bits[:40]):
         raise ValueError("kein XC2064-Bitstream: Kopf %s statt %s" % (bits[:40], PREAMBLE))
     size = 1 + FRAME_BITS + 3
     body = bits[40:40 + FRAMES * size]
     if len(body) < FRAMES * size:
         raise ValueError("zu kurz: %d statt %d Bits" % (len(bits), 40 + FRAMES * size))
     rest = bits[40 + FRAMES * size:]
-    notes = []
+    notes = _header_notes(bits[:40])
     if rest:
         notes.append("%d Bits nach dem letzten Rahmen (%d davon 1), ignoriert" % (len(rest), rest.count("1")))
     return Bitstream(_frames([body[i * size:(i + 1) * size] for i in range(FRAMES)], notes), "BIT", notes=notes)
@@ -57,13 +67,14 @@ def read_bit(data):
 
 def read_rbt(text):
     lines = [l.strip() for l in text.replace("\r", "").split("\n")]
-    if PREAMBLE not in lines:
+    heads = [i for i, l in enumerate(lines) if HEADER.fullmatch(l)]
+    if not heads:
         raise ValueError("keine Kopfzeile %s" % PREAMBLE)
-    head = lines.index(PREAMBLE)
+    head = heads[0]
     frames = lines[head + 1:head + 1 + FRAMES]
     if len(frames) < FRAMES or not all(re.fullmatch(r"[01]{75}", l) for l in frames):
         raise ValueError("erwartet %d Rahmenzeilen aus 75 Zeichen 0/1 nach der Kopfzeile" % FRAMES)
-    notes = []
+    notes = _header_notes(lines[head])
     tail = [l for l in lines[head + 1 + FRAMES:] if l]
     if tail != [POSTAMBLE]:
         notes.append("Ende %r statt %r" % (tail[:2], [POSTAMBLE]))

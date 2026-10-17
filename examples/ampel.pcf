@@ -1,0 +1,10 @@
+# Pin-Zuordnung für ampel.v: set_io <Port> <PLCC68-Pin>
+# Takt, Reset und Taster oben, die Lampen rechts
+set_io clk     P9
+set_io rst     P8
+set_io req     P7
+set_io red     P59
+set_io yellow  P58
+set_io green   P57
+set_io walk    P56
+set_io waiting P55

@@ -1,8 +1,7 @@
 """Abdeckungsbericht und Gegenproben der Datenquellen:  python3 -m xc2064db  (in arch/xc2064)
 
-Endet mit Fehler, wenn eine Gegenprobe scheitert. Abdeckung: welche Bits das Paket dekodiert (Pips,
-Switch-Matrizen, CLB-Eingangs-Muxe), welche es nur benennt (LUT, FF, IOB, Taktpuffer, Other) und welche
-offen sind (Bidi).
+Endet mit Fehler, wenn eine Gegenprobe scheitert. Abdeckung: welche Bits das Paket dekodiert (seit die
+Codes der Taktpuffer-Eingänge bekannt sind, alle benutzten).
 """
 import collections
 import csv
@@ -85,6 +84,30 @@ def main():
     print("  %s" % ", ".join("%s %d" % kv for kv in sorted(kc.items())))
     check(not g.skipped, "jedes PIP-Bit gehört zu einer Verbindung des Graphen %s" % list(g.skipped)[:4])
     print("  nicht modelliert (iob.js): %s" % ", ".join("%s %s" % (p, s) for p, s, _ in g.unmodelled))
+
+    print("Eingänge der Taktpuffer (iobmux.clkmuxes, Codes aus MAKEBITS)")
+    cms = iobmux.clkmuxes(lines, entries)
+    for name, cm in sorted(cms.items()):
+        print("  %s (%s): %s" % (name, cm.net, ", ".join("%d %s" % (c, iobmux.source_name(cm.sources[k]))
+                                                          for c, k in sorted(cm.codes.items(), reverse=True))))
+    check(sum(len(cm.bits) for cm in cms.values()) == kinds["clkmux"],
+          "alle %d Bits CLK.AA.I/CLK.II.I gehören zu einem der beiden Muxe" % kinds["clkmux"])
+    # Bit 5 schaltet eine Quelle an Bit 0-4 zu (aktiv 0); ohne Bit die Grundstellung, ACLK: Oszillator Bits 6+7
+    shape = all(c == (1 << len(cm.bits)) - 1 or (1 << len(cm.bits)) - 1 - c in [0x20 | 1 << i for i in range(5)]
+                for cm in cms.values() for c in cm.codes if cm.sources[cm.codes[c]].kind != "osc")
+    check(shape, "jede Quelle außer der Grundstellung: Bit 5 und genau eines der Bits 0-4 programmiert")
+    used = {}
+    for f in sources.XACT_BITSTREAMS:
+        r = bitstream.read(f).raw
+        for name, cm in cms.items():
+            c = iobmux.code(cm.bits, r)
+            if c != (1 << len(cm.bits)) - 1:
+                used[f.split("/")[-1] + " " + name] = c
+    check(not used, "kein XACT-Bitstream benutzt einen Taktpuffer (beide Muxe in Grundstellung) %s" % (used or ""))
+    check(len(cms["CLK.AA.I"].codes) == 6 and len(cms["CLK.II.I"].codes) == 7 and
+          {s for p, s, _ in g.unmodelled if p in cms} == {"@osc"},
+          "im Graphen: GCLK aus 6 Quellen, ACLK aus 6 (der Oszillator hat kein Bel)")
+
     print("TEST1.LCA (XACT) gegen TEST1.RBT")
     nets = lca.parse()
     raw = bitstream.read(sources.TEST1_RBT).raw
@@ -147,11 +170,10 @@ def main():
     check(counts == {"PC68": 58, "PD48": 40, "PC44": 34, "PG68": 57},
           "Anzahl Benutzer-I/O: PC68 58, PD48 40, PC44 34, PG68 57 (ohne P43, PGA-Pin unbekannt)")
 
-    decoded = sum(n for k, n in kinds.items() if k not in ("unused", "clkmux"))
+    decoded = sum(n for k, n in kinds.items() if k != "unused")
     print("Abdeckung der %d benutzten Bits:" % (bitmap.NBITS - kinds["unused"]))
-    print("  dekodiert (Pips, Switch-Matrizen, Muxe von CLB und IOB, Puffer-Richtung, CLB- und IOB-Konfiguration,"
-          " Optionen): %d" % decoded)
-    print("  offen (Eingänge der Taktpuffer CLK.AA.I, CLK.II.I: kein Bitstream nutzt sie): %d" % kinds["clkmux"])
+    print("  dekodiert (Pips, Switch-Matrizen, Muxe von CLB, IOB und Taktpuffern, Puffer-Richtung, CLB- und "
+          "IOB-Konfiguration, Optionen): %d" % decoded)
     if failed:
         print("%d Gegenproben fehlgeschlagen" % len(failed))
         return 1

@@ -6,8 +6,8 @@ xc2064unpack) -> XC2064-Bitstream als .RBT (genau im Aufbau von XACT) oder .BIT.
 
 Was der Text nicht festlegt, steht im Grundzustand von XACT (unbenutzte CLBs und IOBs, Optionen). Die Richtung
 der Repowering-Puffer leitet das Werkzeug aus dem Routing ab, wenn der Text keine bidi-Zeilen hat oder
-"bidi auto" enthält. Endet mit Fehler bei unbekannten Namen oder Codes, bei einem Taktpuffer-Eingang (Code
-unbekannt) und wenn sich der Bitstream nicht wieder fehlerfrei dekodieren lässt.
+"bidi auto" enthält. Endet mit Fehler bei unbekannten Namen oder Codes und wenn sich der Bitstream nicht wieder
+fehlerfrei dekodieren lässt.
 """
 import argparse
 import os
@@ -24,6 +24,9 @@ def main():
     ap.add_argument("--package", help="Gehäuse für den RBT-Kopf (Standard: aus der Textdatei, sonst PC68)")
     ap.add_argument("--design", help="Name im RBT-Kopf (Standard: Name der Ausgabedatei)")
     ap.add_argument("--compare", metavar="BITSTREAM", help="Ergebnis bitgenau mit diesem Bitstream vergleichen")
+    ap.add_argument("--free-bidi", action="store_true",
+                    help="beim Vergleich Puffer übergehen, deren Richtung das Routing nicht festlegt (für MAKEBITS, "
+                         "das sie mal so, mal so setzt)")
     args = ap.parse_args()
 
     db = config.Database()
@@ -61,9 +64,15 @@ def main():
     if args.compare:
         ref = bitstream.read(args.compare).raw
         diff = [i for i in range(len(ref)) if ref[i] != raw[i]]
-        print("xc2064pack: Vergleich mit %s: %s" % (os.path.basename(args.compare), "bitgenau" if not diff else
-              "%d Bits verschieden, z. B. %s" % (len(diff), ", ".join(db.entries[i].text for i in diff[:3]))),
-              file=sys.stderr)
+        free = []
+        if args.free_bidi:
+            gs = graph.Graph(db.entries, db.lines, split_bidi=True)
+            free_bits = {down.bits[0] for down, code in gs.bidi_directions(raw) if code is None}
+            free = [i for i in diff if i in free_bits]
+            diff = [i for i in diff if i not in free_bits]
+        print("xc2064pack: Vergleich mit %s: %s%s" % (os.path.basename(args.compare), "bitgenau" if not diff else
+              "%d Bits verschieden, z. B. %s" % (len(diff), ", ".join(db.entries[i].text for i in diff[:3])),
+              " (außer %d Puffern mit beliebiger Richtung)" % len(free) if free else ""), file=sys.stderr)
         if diff:
             sys.exit(1)
 

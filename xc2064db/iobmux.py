@@ -14,6 +14,13 @@ Takt der gelatchten Eingänge (Data Book: die IOBs einer Chipseite teilen sich e
 Taktleitung, an der jedes IOB der Seite fest hängt (iob.js: kin), getrieben von einem K-Mux an einer Ecke mit
 Quellen aus dem Randkanal derselben Seite. Die Bitkarte ordnet die 4 Bits jedes K-Muxes einem Pad zu ("IOB
 P9.K MuxBit", P9 oben, P59 rechts, P27 unten, P24 links), Codes aus iob.js (generateIobPips).
+
+Eingänge der Taktpuffer (Datenblatt Bild 8b): GCLK oben links (Bits "CLB CLK.AA.I MuxBit 0-5") und ACLK unten
+rechts ("CLB CLK.II.I MuxBit 0-7"). Shirriff dekodiert sie nicht, und kein XACT-Bitstream benutzt sie. Quellen
+und Codes stammen aus MAKEBITS (XACT 5.2.0, nur als Blackbox): je Quelle ein LCA mit genau diesem Pip
+(Program {xGy}), daraus der Bitstream. Bit 5 schaltet eine von fünf Quellen an Bit 0-4 zu (aktiv 0, wie die
+anderen Muxe), ohne programmiertes Bit gilt die erste Quelle der Tabelle. ACLK kann außerdem der
+Quarzoszillator an P43/P46 treiben (XACT OSC.II.O, Bits 6 und 7).
 """
 import collections
 import re
@@ -22,7 +29,9 @@ from . import sources
 
 Entry = collections.namedtuple("Entry", "index spec kind line col row g special")
 # kind: route (Routing-Leitung line), x/y (X bzw. Y der CLB special), gclk, aclk_in (P43 -> ACLK-Puffer),
-#       clb (Pad -> CLB-Pin special), stub (Stichleitung eines IOB special, Signal unbekannt)
+#       clb (Pad -> CLB-Pin special), stub (Stichleitung eines IOB special, Signal unbekannt),
+#       pad (Eingang des Pads special in einen Taktpuffer), osc (Quarzoszillator)
+# Sonderfälle "@x:AH=col.H.clbr3:row.?.io3": hinter "=" die Kreuzung aus iob.js (G-Lage für XACTs Program)
 
 # K-Muxe: Pad der Bits -> (Seite, Stichleitung des Muxes an der Ecke, Quellen in der Reihenfolge von iob.js,
 # Code -> Index). "@gclk" ist CLK.AA.O bzw. col.A.clk (GCLK), "@stub:..." eine IOB-Stichleitung unbekannter
@@ -39,6 +48,18 @@ KMUX_SPEC = {
 }
 SIDES = "TRBL"
 KMux = collections.namedtuple("KMux", "pin side stub sources codes bits")
+
+# Eingangs-Muxe der Taktpuffer: Mux -> (Taktnetz, [(Code, Quelle, Kreuzung G)]), die Grundstellung zuerst.
+# Quelle: Leitung, "@pad:Pnn" (Eingang des Pads, bei XACT PADn.I) oder "@osc"
+CLKMUX_SPEC = {
+    "CLK.AA.I": ("GCLK", [(63, "row.A.local.3", "16G164"), (30, "@pad:P11", "16G149"), (29, "@pad:P9", "16G156"),
+                          (27, "col.A.local.3", "8G157"), (23, "col.A.long.3", "11G157"),
+                          (15, "row.A.long.3", "16G161")]),
+    "CLK.II.I": ("ACLK", [(255, "row.I.local.2", "165G9"), (222, "@pad:P46", "168G13"),
+                          (221, "col.I.long.2", "170G13"), (219, "col.I.local.2", "173G13"),
+                          (215, "@pad:P43", "165G14"), (207, "row.I.long.1", "165G12"), (63, "@osc", "167G5")]),
+}
+ClkMux = collections.namedtuple("ClkMux", "name net sources codes bits")
 
 
 class Iob:
@@ -67,7 +88,8 @@ def _lists(pin, tile, d):
              "|col.?.clbl1:row.A.long.3"]
         tm = (std_t_top, 4, 6)
         if tile == "AA":
-            o = ["@gclk", "|col.?.io3:row.A.long.2", "|col.?.io3:row.A.local.2", "|col.?.io3:row.A.local.4",
+            o = ["@gclk=col.?.io3:CLK.AA.O", "|col.?.io3:row.A.long.2", "|col.?.io3:row.A.local.2",
+                 "|col.?.io3:row.A.local.4",
                  "-col.A.long.3:row.?.local.5", "-col.A.local.3:row.?.local.5", "-col.A.local.1:row.?.local.5",
                  "-col.A.long.2:row.?.local.5"]
             i = ["|col.?.x:row.A.local.1", "|col.?.x:row.A.local.3", "|col.?.x:row.A.long.3",
@@ -88,14 +110,14 @@ def _lists(pin, tile, d):
         om = {13: 0, 10: 1, 11: 2, 12: 3, 30: 4, 6: 5, 7: 6, 31: 7}
         if tile == "AI":
             o = ["|col.?.clbw1:row.A.local.1", "|col.?.clbw1:row.A.local.3", "|col.?.clbw1:row.A.long.3",
-                 "@x:AH", "-col.I.long.1:row.?.io3", "-col.I.local.1:row.?.io3", "-col.I.local.3:row.?.io3",
-                 "-col.I.long.3:row.?.io3"]
+                 "@x:AH=col.H.clbr3:row.?.io3", "-col.I.long.1:row.?.io3", "-col.I.local.1:row.?.io3",
+                 "-col.I.local.3:row.?.io3", "-col.I.long.3:row.?.io3"]
             i = ["|col.?.clbw2:row.A.long.2", "|col.?.clbw2:row.A.local.2", "|col.?.clbw2:row.A.local.4",
                  "-col.I.long.2:row.?.io2", "-col.I.local.2:row.?.io2", "-col.I.local.4:row.?.io2",
                  "-col.I.long.3:row.?.io2"]
         else:
             o = ["|col.?.clbw1:row.A.local.1", "|col.?.clbw1:row.A.local.3", "|col.?.clbw1:row.A.long.3",
-                 "@x:A%s" % prev_c, "-col.?.local.2:row.A.io2", "-col.?.local.4:row.A.io2",
+                 "@x:A%s=col.?.clbw3:row.A.io2" % prev_c, "-col.?.local.2:row.A.io2", "-col.?.local.4:row.A.io2",
                  "-col.?.local.5:row.A.io2", "-col.?.long.2:row.A.io2"]
             i = ["|col.?.clbw2:row.A.long.2", "|col.?.clbw2:row.A.local.2", "|col.?.clbw2:row.A.local.4",
                  "-col.?.local.1:row.A.local.5", "-col.?.local.3:row.A.local.5", "-col.?.long.1:row.A.local.5"]
@@ -107,7 +129,7 @@ def _lists(pin, tile, d):
              "-col.I.long.1:row.?.io2", "|col.I.io1:row.?.local.3", "|col.I.io1:row.?.local.5"]
         o = ["-col.I.local.4:row.?.io3", "-col.I.local.2:row.?.io3", "-col.I.long.2:row.?.io3",
              "|col.I.io2:row.?.local.1", "|col.I.io2:row.?.local.4", "|col.I.io2:row.?.long.1",
-             "@x:%sH" % prev_r, "@y:%sH" % prev_r]
+             "@x:%sH=col.I.io2:%sH.B" % (prev_r, prev_r), "@y:%sH=col.I.io2:%sH.Y" % (prev_r, prev_r)]
         om = {6: 0, 30: 1, 20: 2, 21: 3, 19: 4, 18: 5, 7: 6, 31: 7}
     elif d == "rightupper":
         t = ["-col.I.long.3:row.?.io4", "-col.I.local.4:row.?.io4", "-col.I.local.2:row.?.io4",
@@ -117,7 +139,7 @@ def _lists(pin, tile, d):
              "|col.I.io3:row.?.long.1", "|col.I.io3:row.?.local.4", "|col.I.io3:row.?.local.1"]
         o = ["-col.I.long.3:row.?.io6", "-col.I.local.3:row.?.io6", "-col.I.local.1:row.?.io6",
              "-col.I.long.1:row.?.io6", "|col.I.local.0:row.?.local.5", "|col.I.local.0:row.?.local.3",
-             "@x:%sH" % r, "@y:%sH" % r]
+             "@x:%sH=col.I.local.0:%sH.B" % (r, r), "@y:%sH=col.I.local.0:%sH.Y" % (r, r)]
         om = {31: 0, 25: 1, 21: 2, 13: 3, 12: 4, 24: 5, 20: 6, 30: 7}
     elif d == "bottomright":
         t = ["|col.?.clbw3:row.I.long.2", "|col.?.clbw3:row.I.local.4", "|col.?.clbw3:row.I.local.2",
@@ -126,7 +148,7 @@ def _lists(pin, tile, d):
         if tile == "II":
             o = ["|col.?.clbw1:row.I.clk", "|col.?.clbw1:row.I.local.4", "|col.?.clbw1:row.I.local.2",
                  "|col.?.clbw1:row.I.long.1", "-col.?.long.2:row.I.io2", "-col.?.local.2:row.I.io2",
-                 "-col.?.local.4:row.I.io2", "-col.?.long.3:row.I.io2", "@x:HH"]
+                 "-col.?.local.4:row.I.io2", "-col.?.long.3:row.I.io2", "@x:HH=col.?.clbw3:row.I.io2"]
             i = ["|col.?.clbw2:row.I.long.2", "|col.?.clbw2:row.I.local.3", "|col.?.clbw2:row.I.local.1",
                  "@aclk_in", "-col.?.long.1:row.I.io3", "-col.?.local.1:row.I.io3", "-col.?.local.3:row.I.io3",
                  "-col.?.long.3:row.I.io3"]
@@ -134,7 +156,7 @@ def _lists(pin, tile, d):
         else:
             o = ["|col.?.clbw1:row.I.local.4", "|col.?.clbw1:row.I.local.2", "|col.?.clbw1:row.I.long.1",
                  "-col.?.local.2:row.I.io3", "-col.?.local.4:row.I.io3", "-col.?.local.5:row.I.io3",
-                 "-col.?.long.2:row.I.io3", "@x:H%s" % prev_c]
+                 "-col.?.long.2:row.I.io3", "@x:H%s=col.?.clbw3:row.I.io3" % prev_c]
             i = ["|col.?.clbw2:row.I.long.2", "|col.?.clbw2:row.I.local.3", "|col.?.clbw2:row.I.local.1",
                  "-col.?.local.1:row.I.io4", "-col.?.local.3:row.I.io4", "-col.?.long.1:row.I.io4"]
             om = {13: 0, 10: 1, 11: 2, 30: 3, 6: 4, 7: 5, 31: 6, 12: 7}
@@ -184,10 +206,15 @@ def _lists(pin, tile, d):
 
 
 def _entry(idx, spec, tile, lines):
-    """Ein Eintrag aus iob.js -> Entry (Routing-Leitung oder Sonderfall)"""
+    """Ein Eintrag aus iob.js -> Entry (Routing-Leitung oder Sonderfall, dieser mit G-Lage, wenn bekannt)"""
     if spec.startswith("@"):
-        kind, _, arg = spec[1:].partition(":")
-        return Entry(idx, spec, kind, None, None, None, None, arg or None)
+        head, _, cross = spec[1:].partition("=")
+        kind, _, arg = head.partition(":")
+        g = None
+        if cross:
+            a, b = cross.split(":")
+            g = "%dG%d" % (lines.col_info[a.replace("?", tile[1], 1)][0], lines.row_info[b.replace("?", tile[0], 1)][0])
+        return Entry(idx, spec, kind, None, None, None, g, arg or None)
     d, a, b = spec[0], *spec[1:].split(":")
     col = a.replace("?", tile[1], 1)
     row = b.replace("?", tile[0], 1)
@@ -237,7 +264,11 @@ def kmuxes(lines, entries):
         for k, spec in enumerate(specs):
             if spec.startswith("@"):
                 kind, _, arg = spec[1:].partition(":")
-                sources.append(Entry(k, spec, kind, None, None, None, None, arg or None))
+                g = None
+                if kind == "gclk":  # Kreuzung der Stichleitung mit CLK.AA.O (oben) bzw. col.A.clk (links)
+                    col, row = (stub, "CLK.AA.O") if stub.startswith("col.") else ("col.A.clk", stub)
+                    g = "%dG%d" % (lines.col_info[col][0], lines.row_info[row][0])
+                sources.append(Entry(k, spec, kind, None, None, None, g, arg or None))
                 continue
             col, row = (stub, spec) if stub.startswith("col.") else (spec, stub)
             g = "%dG%d" % (lines.col_info[col][0], lines.row_info[row][0])
@@ -249,16 +280,47 @@ def kmuxes(lines, entries):
     return result
 
 
+def clkmuxes(lines, entries):
+    """Mux (CLK.AA.I, CLK.II.I) -> ClkMux (Quellen als Entry an ihrer Kreuzung, codes: Code -> Index,
+    bits: n -> Bitnummer)"""
+    bits = collections.defaultdict(dict)
+    for e in entries:
+        if e.kind == "clkmux":
+            bits[e.key[0]][e.key[1]] = e.index
+    result = {}
+    for name, (net, specs) in CLKMUX_SPEC.items():
+        sources, codes = [], {}
+        for k, (c, spec, g) in enumerate(specs):
+            codes[c] = k
+            if spec.startswith("@"):
+                kind, _, arg = spec[1:].partition(":")
+                sources.append(Entry(k, spec, kind, None, None, None, g, arg or None))
+                continue
+            gx, gy = (int(v) for v in g.split("G"))
+            col, row = lines.col_name[gx], lines.row_name[gy]
+            if spec not in (col, row):
+                raise ValueError("%s: Quelle %s liegt nicht an der Kreuzung %s (%s, %s)" % (name, spec, g, col, row))
+            sources.append(Entry(k, spec, "route", spec, col, row, g, None))
+        n = len(bits[name])
+        if sorted(bits[name]) != list(range(n)) or any(c >= 1 << n for c in codes):
+            raise ValueError("%s: Mux-Bits %s bzw. Codes passen nicht" % (name, sorted(bits[name])))
+        if (1 << n) - 1 not in codes:
+            raise ValueError("%s: keine Quelle für die Grundstellung" % name)
+        result[name] = ClkMux(name, net, sources, codes, bits[name])
+    return result
+
+
 def code(bits, raw):
     return sum(raw[b] << n for n, b in bits.items())
 
 
 def source_name(ent):
-    """Name einer Quelle des O-, T- bzw. K-Mux im Textformat: Leitung, X/Y einer CLB, GCLK oder Stichleitung"""
+    """Name einer Quelle des O-, T-, K- bzw. Taktpuffer-Mux im Textformat: Leitung, X/Y einer CLB, GCLK,
+    Stichleitung, Pad (P9) oder OSC"""
     if ent.kind == "route":
         return ent.line
     if ent.kind in ("x", "y"):
         return "%s.%s" % (ent.special, ent.kind.upper())
-    if ent.kind == "stub":
+    if ent.kind in ("stub", "pad"):
         return ent.special
     return ent.kind.upper()

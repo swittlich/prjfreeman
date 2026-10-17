@@ -1,0 +1,15 @@
+# Pin-Zuordnung für uart_tx.v: set_io <Port> <PLCC68-Pin>
+# Takt, Reset, start und data oben, tx und busy rechts
+set_io clk     P9
+set_io rst     P8
+set_io start   P7
+set_io data[0] P6
+set_io data[1] P5
+set_io data[2] P4
+set_io data[3] P3
+set_io data[4] P2
+set_io data[5] P68
+set_io data[6] P67
+set_io data[7] P66
+set_io tx      P59
+set_io busy    P58

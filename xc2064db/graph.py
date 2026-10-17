@@ -15,7 +15,8 @@ Segmente (Datenblatt "General-Purpose Interconnect", Bild 7b; Lage aus den G-Koo
     R-1 mit dem Stück R. In Zeile A gibt es kein Stück darüber, die Kreuzungen in Zeile I gehören zu Stück H.
     Knoten "col.C.local.5@R". Belegt durch TEST1.LCA (Netz p1).
   - Long Lines laufen über die ganze Höhe bzw. Breite: Knoten = Leitungsname.
-  - GCLK (col.*.clk, CLK.AA.O) ist ein Knoten "GCLK", die ACLK-Leitung unten (row.I.clk) ein Knoten "ACLK".
+  - GCLK (col.*.clk, CLK.AA.O) ist ein Knoten "GCLK", die ACLK-Leitung unten (row.I.clk) ein Knoten "ACLK",
+    getrieben von den Taktpuffern; deren Eingangs-Muxe sind Verbindungen clkbuf (iobmux.clkmuxes).
   - CLB-Ausgänge: X (Zeile io6) und Y (Zeile y) einer CLB "RC.X", "RC.Y", Eingänge "RC.A" ... "RC.K".
   - Direktverbindungen (Datenblatt "Direct Interconnect"): X geht fest auf A/B der CLB darunter (Quellen
     row.R.io4, col.C.x an b) und C/D der CLB darüber (col.C.x an c, row.R+1.io3), Y auf B der CLB rechts
@@ -28,12 +29,13 @@ Segmente (Datenblatt "General-Purpose Interconnect", Bild 7b; Lage aus den G-Koo
     "Pnn.K" jedes IOB hängt fest an der Leitung seiner Seite.
 
 Verbindungsarten (Conn.kind): pip (PIP-Bit, zwischen allgemeinen Leitungen in beide Richtungen),
-out (PIP-Bit von X/Y auf eine Leitung), switch (Magic-Bit), junction (Verbindungspunkt der fünften
+out (PIP-Bit von X/Y auf eine Leitung), clkout (PIP-Bit von ACLK auf eine senkrechte Long Line, nur in diese
+Richtung: ACLK treibt immer sein Puffer, auch in der Grundstellung), switch (Magic-Bit), junction (Verbindungspunkt der fünften
 Leitung), mux (CLB-Eingang: Quelle -> Pin, bits = Mux-Bits, code), iobo/iobt (Ausgangs- bzw. T-Mux eines
 IOB: Quelle -> Pnn.O/T, mit code; Treiber aus/an sind Codes ohne Quelle), iobi (PIP-Bit: Pnn.I ->
 Leitung), iobk (K-Mux: Quelle -> IOCLK.<Seite>, mit code), iobkin (fest: IOCLK.<Seite> -> Pnn.K, ohne Bit),
-clkbuf (Eingang eines Taktpuffers, Code unbekannt), bidi (Repowering-Puffer, nur im Prüfmodus
-split_bidi). Die Einträge aus iob.js ohne PIP-Bit stehen in Graph.unmodelled. Konstanten gibt es im
+clkbuf (Eingang eines Taktpuffers: Leitung oder Pnn.I -> GCLK/ACLK, mit code), bidi (Repowering-Puffer, nur
+im Prüfmodus split_bidi). Die Einträge aus iob.js ohne PIP-Bit stehen in Graph.unmodelled. Konstanten gibt es im
 Original nicht als Leitung (nextpnr: pack() faltet sie in LUT-Inhalte).
 """
 import bisect
@@ -265,6 +267,8 @@ class Graph:
             elif rk == "local.0":  # Verbindungspunkt der fünften Leitung (über D und G hinter dem Puffer)
                 self.conns.append(Conn("junction", self.seg_col("col.%s.local.5" % c, gy),
                                        "col.%s.local.5@%s" % (c, r), [e.index], None, name))
+            elif rk == "clk":  # ACLK ist der Ausgang seines Puffers (XACT: col.D.long.2:CLK.II.O)
+                self.conns.append(Conn("clkout", "ACLK", self.seg_col(col, gy), [e.index], None, name))
             else:
                 self.conns.append(Conn("pip", self.seg_col(col, gy), self.seg_row(row, gx), [e.index], None, name))
 
@@ -291,7 +295,10 @@ class Graph:
     def _iobs(self):
         """IOBs (iob.js): O- und T-Mux mit Codes, Eingangs-Pips; Pad -> CLB-Pin merkt sich pad_of_clb"""
         self.iobs = iobmux.iobs(self.lines, self.entries)
+        self.clkmuxes = iobmux.clkmuxes(self.lines, self.entries)
         pip_bit = {e.key[0]: e.index for e in self.entries if e.kind == "pip"}
+        # Eingänge der Pads in die Taktpuffer: in iob.js Kreuzungen ohne PIP-Bit bzw. @aclk_in (_clkbufs)
+        clk_in = {(s.special, s.g) for cm in self.clkmuxes.values() for s in cm.sources if s.kind == "pad"}
         self.pad_of_clb = {}  # (CLB-Pin, Seite T/L/B) -> Pin des Pads
         for pin, iob in sorted(self.iobs.items()):
             for which, lst, codes, bits in (("O", iob.o, iob.omux, iob.obits), ("T", iob.t, iob.tmux, iob.tbits)):
@@ -307,6 +314,8 @@ class Graph:
             for ent in iob.i:
                 if ent.kind == "clb":
                     self.pad_of_clb[(ent.special, iob.style[0].upper())] = pin
+                    continue
+                if ent.kind == "aclk_in" or (pin, ent.g) in clk_in:
                     continue
                 bit = pip_bit.get(ent.g)
                 if ent.kind != "route" or not self._route_ok(ent) or bit is None:
@@ -344,7 +353,7 @@ class Graph:
     def cfg(self, cn):
         """Zeile im Textformat (config.py), die diese Verbindung programmiert; None für die Puffer (bidi) und
         feste Verbindungen (iobkin)"""
-        if cn.kind in ("pip", "out", "junction", "iobi"):
+        if cn.kind in ("pip", "out", "clkout", "junction", "iobi"):
             return "pip " + self.lines.pip_name(self.entries[cn.bits[0]].key[0])
         if cn.kind == "switch":
             return "switch " + cn.name
@@ -392,16 +401,22 @@ class Graph:
 
     def _clkbufs(self):
         """Taktpuffer (Datenblatt Bild 8b): GCLK oben links treibt CLK.AA.O und col.*.clk, ACLK unten rechts
-        row.I.clk. Ihre Eingangs-Muxe CLK.AA.I (6 Bits) und CLK.II.I (8 Bits) dekodiert auch Shirriff nicht, und
-        kein XACT-Bitstream benutzt sie. Modelliert ist nur der Weg vom eigenen Pad (P9 bzw. P43) mit den
-        Bits des Muxes und unbekanntem Code (None)."""
-        bits = collections.defaultdict(dict)
-        for e in self.entries:
-            if e.kind == "clkmux":
-                bits[e.key[0]][e.key[1]] = e.index
-        for mux, pin, net in (("CLK.AA.I", "P9", "GCLK"), ("CLK.II.I", "P43", "ACLK")):
-            self.conns.append(Conn("clkbuf", pin + ".I", net, [bits[mux][n] for n in sorted(bits[mux])], None,
-                                   "%s %s" % (mux, pin)))
+        row.I.clk. Ihre Eingangs-Muxe CLK.AA.I (6 Bits) und CLK.II.I (8 Bits) mit Quellen und Codes aus
+        iobmux.clkmuxes (mit MAKEBITS ermittelt): Leitungen am Rand, die Pads P9/P11 bzw. P43/P46. Der
+        Quarzoszillator (Quelle von ACLK) hat kein Bel und steht in unmodelled."""
+        for name, cm in sorted(self.clkmuxes.items()):
+            bits = [cm.bits[n] for n in sorted(cm.bits)]
+            for code, k in sorted(cm.codes.items()):
+                ent = cm.sources[k]
+                if ent.kind == "route":
+                    src = self.route_node(ent)
+                elif ent.kind == "pad":
+                    src = ent.special + ".I"
+                else:
+                    self.unmodelled.append((name, ent.spec, "Quelle des Taktpuffers (Oszillator, kein Bel)"))
+                    continue
+                self.conns.append(Conn("clkbuf", src, cm.net, bits, code,
+                                       "%s %s" % (name, iobmux.source_name(ent))))
 
     def mux_source(self, m, s, gx, gy):
         r, c = m.tile

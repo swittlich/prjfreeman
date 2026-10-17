@@ -86,7 +86,7 @@ NPNR_PACKED_STRUCT(struct Xc2064PipExtraPOD {
 enum PipKind
 {
     PIP_CFG = 1,
-    PIP_CLKBUF = 2, // Eingang eines Taktpuffers: Code unbekannt, nur mit --vopt clkbuf
+    PIP_CLKBUF = 2, // Eingang eines Taktpuffers: nur mit --vopt clkbuf
 };
 
 struct Xc2064Impl : HimbaechelAPI
@@ -104,8 +104,8 @@ struct Xc2064Impl : HimbaechelAPI
                                "A2...L10)");
         specific.add_options()("out", po::value<std::string>(),
                                "write the configuration as text for xc2064pack (format: arch/xc2064/xc2064db/config.py)");
-        specific.add_options()("clkbuf", "use the clock buffers GCLK/ACLK (their input codes are unknown, so the "
-                                         "result cannot become a bitstream)");
+        specific.add_options()("clkbuf", "use the clock buffers GCLK/ACLK: clocks at P9/P43 run over them, clocks "
+                                         "without a pin constraint are placed there");
         return specific;
     }
 
@@ -487,7 +487,115 @@ struct Xc2064Impl : HimbaechelAPI
         log_info("Constrained %d LUT3/FF, %d LUT4/FF and %d FGM/FF pairs, %d Q feedback inputs moved to input 3, "
                  "%d unused LUT inputs made don't-care.\n",
                  n3, n4, nm, moved, unused);
+        pair_lut3();
         dff_timing();
+    }
+
+    // CLB-Paare: Hat das Design mehr LUT-Zellen als der Chip CLBs, legt pack() LUT3 paarweise als F und G in eine
+    // CLB. Sonst verteilt der Placer (HeAP) sie einzeln über den Chip, und für LUT4 und FGM, die eine ganze CLB
+    // brauchen, bleibt kein Platz. Kandidaten: ein LUT3/FF-Cluster nimmt eine freie LUT3 als G, zwei freie LUT3
+    // bilden einen neuen Cluster. Vorrang hat, wer Reset oder Takt des FF liefert (G treibt beide in der CLB), dann
+    // die Zahl gemeinsamer Eingänge; Paare ohne Gemeinsamkeit nur, solange es noch zu eng ist. clb_cells_valid
+    // prüft jedes Paar wie eine platzierte CLB.
+    void pair_lut3()
+    {
+        int n_lut3 = 0, n_whole = 0, n_clb = 0;
+        std::vector<CellInfo *> roots, free; // LUT3/FF-Cluster mit freiem G, LUT3 ohne Cluster
+        for (auto &cell : ctx->cells) {
+            CellInfo *ci = cell.second.get();
+            n_whole += ci->type.in(id_XC2000_LUT4, id_XC2000_FGM);
+            if (ci->type != id_XC2000_LUT3)
+                continue;
+            n_lut3++;
+            if (ci->cluster == ClusterId())
+                free.push_back(ci);
+            else if (ci->cluster == ci->name)
+                roots.push_back(ci);
+        }
+        for (BelId bel : ctx->getBels())
+            n_clb += ctx->getBelType(bel) == id_DFF;
+        if (n_lut3 + n_whole <= n_clb)
+            return;
+        auto by_name = [&](const CellInfo *a, const CellInfo *b) { return a->name.str(ctx) < b->name.str(ctx); };
+        std::sort(roots.begin(), roots.end(), by_name);
+        std::sort(free.begin(), free.end(), by_name);
+        auto ff_of = [&](const CellInfo *root) -> const CellInfo * {
+            for (const CellInfo *c : root->constr_children)
+                if (c->type == id_XC2000_DFF)
+                    return c;
+            return nullptr;
+        };
+        auto score = [&](const CellInfo *a, const CellInfo *b, const CellInfo *ff) {
+            int s = 0;
+            const NetInfo *o = b->getPort(id_O);
+            if (ff && o && (ff->getPort(id_R) == o || ff->getPort(id_CLK) == o))
+                s += 10;
+            for (int i = 0; ff && i < 3; i++) // G liest das Q dieses FF: bleibt in der CLB
+                if (b->getPort(lut_in(i)) && b->getPort(lut_in(i)) == ff->getPort(id_Q))
+                    s += 3;
+            for (int i = 0; i < 3; i++)
+                for (int j = 0; j < 3; j++) {
+                    const NetInfo *n = a->getPort(lut_in(i));
+                    if (n && n == b->getPort(lut_in(j)))
+                        s++;
+                }
+            return s;
+        };
+        struct Cand
+        {
+            int score;
+            CellInfo *f, *g;
+        };
+        std::vector<Cand> cands;
+        for (CellInfo *r : roots)
+            for (CellInfo *g : free)
+                if (clb_cells_valid(r, g, nullptr, nullptr, ff_of(r), ""))
+                    cands.push_back({score(r, g, ff_of(r)), r, g});
+        for (size_t i = 0; i < free.size(); i++)
+            for (size_t j = i + 1; j < free.size(); j++)
+                if (clb_cells_valid(free[i], free[j], nullptr, nullptr, nullptr, ""))
+                    cands.push_back({score(free[i], free[j], nullptr), free[i], free[j]});
+        std::stable_sort(cands.begin(), cands.end(), [](const Cand &a, const Cand &b) { return a.score > b.score; });
+        // Bedarf an CLBs: LUT4/FGM, LUT3-Cluster und einzelne LUT3; Ziel 85 % der CLBs
+        int demand = n_whole + int(roots.size() + free.size()), target = n_clb * 85 / 100, paired = 0, swapped = 0;
+        pool<IdString> used;
+        for (const Cand &c : cands) {
+            if (c.score == 0 && demand <= target)
+                break;
+            if (used.count(c.f->name) || used.count(c.g->name))
+                continue;
+            used.insert(c.f->name);
+            used.insert(c.g->name);
+            c.f->cluster = c.f->name;
+            c.f->constr_abs_z = false;
+            c.f->constr_children.push_back(c.g);
+            c.g->cluster = c.f->name;
+            c.g->constr_x = c.g->constr_y = 0;
+            c.g->constr_z = Z_G - Z_F;
+            c.g->constr_abs_z = false;
+            demand--;
+            paired++;
+            // Liest G das Q des FF dieser CLB an Eingang 1 oder 2, legt pack() es wie beim D-LUT auf Eingang 3:
+            // sonst müsste Q über X/Y hinaus und über das Routing zurück auf A-D
+            const CellInfo *ff = ff_of(c.f);
+            const NetInfo *q = ff ? ff->getPort(id_Q) : nullptr;
+            if (q && c.g->getPort(lut_in(2)) != q) {
+                const Table t = tables(c.g).at(0);
+                for (int i = 0; i < 2; i++) {
+                    if (c.g->getPort(lut_in(i)) != q)
+                        continue;
+                    swap_lut_inputs(c.g, t, i, 2);
+                    if (clb_cells_valid(c.f, c.g, nullptr, nullptr, ff, ""))
+                        swapped++;
+                    else
+                        swap_lut_inputs(c.g, t, i, 2); // zurück: so wäre die CLB nicht mehr legal
+                    break;
+                }
+            }
+        }
+        log_info("CLB pairs: %d LUT3 placed together as F and G (%d LUT cells for %d CLBs), about %d CLBs needed, "
+                 "%d Q feedback inputs of G moved to input 3.\n",
+                 paired, n_lut3 + n_whole, n_clb, demand, swapped);
     }
 
     // Timing des Speicherelements je nach Art (xc2064_arch_gen.py, set_timings): FF mit steigender/fallender Flanke
@@ -826,16 +934,24 @@ struct Xc2064Impl : HimbaechelAPI
 
     bool clb_valid(int x, int y, bool explain) const
     {
-        const CellInfo *f = cell_at(x, y, Z_F), *g = cell_at(x, y, Z_G);
-        const CellInfo *fg = cell_at(x, y, Z_FG), *fgm = cell_at(x, y, Z_FGM), *ff = cell_at(x, y, Z_FF);
+        return clb_cells_valid(cell_at(x, y, Z_F), cell_at(x, y, Z_G), cell_at(x, y, Z_FG), cell_at(x, y, Z_FGM),
+                               cell_at(x, y, Z_FF), explain ? stringf("X%dY%d", x, y) : std::string());
+    }
+
+    // Ist diese Belegung einer CLB (F, G, FG, FGM, FF; nullptr = frei) legal? Auch für noch nicht platzierte Zellen
+    // (Paare in pack()). where: Ort für die Begründung im Log, leer = keine Begründung
+    bool clb_cells_valid(const CellInfo *f, const CellInfo *g, const CellInfo *fg, const CellInfo *fgm,
+                         const CellInfo *ff, const std::string &where) const
+    {
+        const bool explain = !where.empty();
+        const char *at = where.c_str();
 
         // 1. Der F/G-Verbund (FG: Funktion von 4 Variablen, FGM: Mux-Modus) belegt beide Funktionsgeneratoren,
         // sein Ausgang liegt an F und an G
         const CellInfo *both = fg ? fg : fgm;
         if (both && (f || g || (fg && fgm))) {
             if (explain)
-                log_info("X%dY%d: %s und ein weiterer Funktionsgenerator gleichzeitig belegt\n", x, y,
-                         fg ? "LUT4 (FG)" : "FGM");
+                log_info("%s: %s und ein weiterer Funktionsgenerator gleichzeitig belegt\n", at, fg ? "LUT4 (FG)" : "FGM");
             return false;
         }
         const NetInfo *f_out = f ? f->getPort(id_O) : both ? both->getPort(id_O) : nullptr;
@@ -847,7 +963,7 @@ struct Xc2064Impl : HimbaechelAPI
             const NetInfo *d = ff->getPort(id_D);
             if (d && (!f_out || d != f_out)) {
                 if (explain)
-                    log_info("X%dY%d: FF-Daten kommen nicht aus F bzw. FG/FGM dieser CLB\n", x, y);
+                    log_info("%s: FF-Daten kommen nicht aus F bzw. FG/FGM dieser CLB\n", at);
                 return false;
             }
         }
@@ -888,8 +1004,7 @@ struct Xc2064Impl : HimbaechelAPI
         for (const Req &r : reqs)
             if (!r.opts) {
                 if (explain)
-                    log_info("X%dY%d: Netz %s erreicht seinen Pin über keinen Multiplexer\n", x, y,
-                             r.net->name.c_str(ctx));
+                    log_info("%s: Netz %s erreicht seinen Pin über keinen Multiplexer\n", at, r.net->name.c_str(ctx));
                 return false;
             }
         std::sort(reqs.begin(), reqs.end(),
@@ -897,7 +1012,46 @@ struct Xc2064Impl : HimbaechelAPI
         std::array<const NetInfo *, 4> inputs{};
         if (!assign(reqs, 0, inputs)) {
             if (explain)
-                log_info("X%dY%d: Eingangssignale passen nicht auf die Multiplexer von A-D\n", x, y);
+                log_info("%s: Eingangssignale passen nicht auf die Multiplexer von A-D\n", at);
+            return false;
+        }
+
+        // 4. Nur X und Y führen aus der CLB: höchstens zwei Signale dürfen sie verlassen. In der CLB bleiben nur
+        // die festen Wege F -> D und Set, G -> Reset und Takt (FG/FGM an beiden) und Q -> Eingang 3.
+        auto internal = [&](const NetInfo *n, const PortRef &u) {
+            if (u.cell == ff) {
+                if (u.port.in(id_D, id_S))
+                    return n == f_out;
+                if (u.port.in(id_R, id_CLK))
+                    return n == g_out;
+                return false;
+            }
+            if (n != q_out)
+                return false;
+            if (u.cell == f || u.cell == g || u.cell == fg)
+                return u.port == lut_in(2);
+            if (u.cell == fgm)
+                return u.port == fgm_in(0, 2) || u.port == fgm_in(1, 2);
+            return false;
+        };
+        int leaving = 0;
+        const NetInfo *seen[3] = {nullptr, nullptr, nullptr};
+        int ns = 0;
+        for (const NetInfo *n : {f_out, g_out, q_out}) {
+            if (!n || std::find(seen, seen + ns, n) != seen + ns)
+                continue;
+            seen[ns++] = n;
+            bool out = false;
+            for (auto &u : n->users)
+                if (!internal(n, u)) {
+                    out = true;
+                    break;
+                }
+            leaving += out;
+        }
+        if (leaving > 2) {
+            if (explain)
+                log_info("%s: drei Signale müssten die CLB verlassen, X und Y sind nur zwei\n", at);
             return false;
         }
         return true;
@@ -947,8 +1101,8 @@ struct Xc2064Impl : HimbaechelAPI
         return !(net && pad_exit_pips.count(pip) && clock_only_nets.count(net->name));
     }
 
-    // Die Eingänge der Taktpuffer gibt es nur mit --vopt clkbuf: ihr Code ist unbekannt, ein Design damit
-    // ließe sich nicht in einen Bitstream übersetzen
+    // Die Eingänge der Taktpuffer gibt es nur mit --vopt clkbuf (Codes mit MAKEBITS ermittelt, ohne die
+    // Option bleiben die Ergebnisse wie vorher)
     bool checkPipAvail(PipId pip) const override
     {
         if (clkbuf)
@@ -1206,6 +1360,8 @@ struct Xc2064Impl : HimbaechelAPI
     static int row_kind(int y) { return y <= 1 ? 0 : y >= LAST ? 2 : 1; }
     static float vx(int x, int l) { return VPOS[col_kind(x)][l]; }
     static float hy(int y, int l) { return HPOS[row_kind(y)][l]; }
+    // rechtes Ende von ACLK in II: dort der Eingang des Puffers
+    static float aclk_end() { return vx(LAST, V_LONG3) + 0.02f; }
 
     // Switch-Matrizen 8.1 (m = 0) und 8.2 (m = 1): senkrecht local.1/2 bzw. local.3/4, waagerecht je nach
     // Zeile (G-Lage der Pins, xc2064db.switches); an den vier Ecken des Chips keine
@@ -1528,8 +1684,9 @@ struct Xc2064Impl : HimbaechelAPI
             } else { // Long Line, GCLK: über die ganze Höhe, am Rand bis in den Randkanal
                 float y0 = y == 1 ? hy(1, H_CLK) : 0.0f, y1 = y == LAST ? hy(LAST, H_CLK) + 0.02f : 1.0f;
                 poly(g, style, loc, {{px, y0}, {px, y1}});
-                if (c.line == V_CLK && y == 1) // CLK.AA.O: vom Taktpuffer oben links zu allen Spalten
-                    poly(g, style, loc, {{x == 1 ? px : 0.0f, hy(1, H_CLK)}, {1.0f, hy(1, H_CLK)}});
+                if (c.line == V_CLK && y == 1) // CLK.AA.O: vom Taktpuffer oben links zu allen Spalten; in AA
+                                               // ab local.3 (Eingang des GCLK-Puffers, kreuzt local.3, long.3)
+                    poly(g, style, loc, {{x == 1 ? vx(1, V_LOC3) : 0.0f, hy(1, H_CLK)}, {1.0f, hy(1, H_CLK)}});
             }
         } else {
             float py = hy(y, c.line);
@@ -1542,8 +1699,10 @@ struct Xc2064Impl : HimbaechelAPI
                 float x1 = tile_has_sm(x + 1, y) ? 1 + sm_box(x + 1, y, sm_of_h(y, c.line)).x0 : 1.36f;
                 poly(g, style, loc, {{x0, py}, {x1, py}});
             } else { // Long Line, ACLK
-                float x0 = x == 1 ? vx(1, V_LONG2) : 0.0f, x1 = x == LAST ? vx(LAST, V_LONG3) + 0.02f : 1.0f;
+                float x0 = x == 1 ? vx(1, V_LONG2) : 0.0f, x1 = x == LAST ? aclk_end() : 1.0f;
                 poly(g, style, loc, {{x0, py}, {x1, py}});
+                if (c.line == H_CLK && x == LAST) // Eingang des ACLK-Puffers: kreuzt row.I.long.1 und local.1-4
+                    poly(g, style, loc, {{x1, py}, {x1, hy(LAST, H_LONG1)}});
             }
         }
     }
@@ -1673,11 +1832,13 @@ struct Xc2064Impl : HimbaechelAPI
         Iob b = iob(loc, z);
         float u = pin_u(b, PIN_R[p]);
         if (other == GFX_WIRE_GCLK) { // P9: CLK.AA.O über der Zeile A (Ausgangs-Mux und Taktpuffer)
-            res = {u, 1 + hy(1, H_CLK), false};
+            res = b.side == 'T' ? IobPip{u, 1 + hy(1, H_CLK), false}
+                                : IobPip{u, 1 + vx(1, V_CLK), false}; // P11 (links): col.A.clk
             return true;
         }
         if (other == GFX_WIRE_ACLK) { // P43: row.I.clk
-            res = {u, 1 - hy(LAST, H_CLK), false};
+            res = b.side == 'B' ? IobPip{u, 1 - hy(LAST, H_CLK), false}
+                                : IobPip{1 + hy(LAST, H_CLK), stub_d(b.side, z, true), true}; // P46 (rechts)
             return true;
         }
         Chan c = chan(other);
@@ -2162,6 +2323,15 @@ struct Xc2064Impl : HimbaechelAPI
 
         // Kanäle: Switch-Matrix (Pin zu Pin), Kreuzung (Kästchen), Verbindungspunkt der fünften Leitung
         Chan cs = chan(src_id), cd = chan(dst_id);
+        // Eingang eines Taktpuffers von einer Leitung parallel zur Taktleitung: senkrechte Quellen von GCLK
+        // kreuzen CLK.AA.O oben in AA, waagerechte von ACLK dessen Ende in II
+        if (cs.ok && cd.ok && cs.vert == cd.vert && (dst_id == GFX_WIRE_GCLK || dst_id == GFX_WIRE_ACLK)) {
+            if (dst_id == GFX_WIRE_GCLK)
+                pip_box(g, style, loc, chan_x(loc, cs, -1), hy(1, H_CLK));
+            else
+                pip_box(g, style, loc, aclk_end(), chan_y(loc, cs));
+            return;
+        }
         if (cs.ok && cd.ok) {
             if (sm_line(loc, cs) && sm_line(loc, cd)) {
                 auto a = sm_pin_pt(loc, cs), b = sm_pin_pt(loc, cd);

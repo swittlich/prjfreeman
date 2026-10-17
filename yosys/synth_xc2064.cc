@@ -394,6 +394,10 @@ struct SynthXc2064Pass : public ScriptPass
 		log("    -noiobff\n");
 		log("        keep input flip-flops in the CLBs (xc2064_iobff moves them into the IOBs)\n");
 		log("\n");
+		log("    -fsm\n");
+		log("        let yosys extract and re-encode state machines (default: keep the encoding of\n");
+		log("        the RTL, flip-flops are scarce with one per CLB)\n");
+		log("\n");
 		log("    -run <from_label>:<to_label>\n");
 		log("        only run the commands between the labels (see below). an empty\n");
 		log("        from label is synonymous to 'begin', and empty to label is\n");
@@ -405,7 +409,7 @@ struct SynthXc2064Pass : public ScriptPass
 	}
 
 	std::string top_opt, json_file;
-	bool noiopad, nofgm, noiobff;
+	bool noiopad, nofgm, noiobff, fsm;
 
 	void clear_flags() override
 	{
@@ -414,6 +418,7 @@ struct SynthXc2064Pass : public ScriptPass
 		noiopad = false;
 		nofgm = false;
 		noiobff = false;
+		fsm = false;
 	}
 
 	void execute(std::vector<std::string> args, RTLIL::Design *design) override
@@ -441,6 +446,10 @@ struct SynthXc2064Pass : public ScriptPass
 			}
 			if (args[argidx] == "-noiobff") {
 				noiobff = true;
+				continue;
+			}
+			if (args[argidx] == "-fsm") {
+				fsm = true;
 				continue;
 			}
 			if (args[argidx] == "-run" && argidx + 1 < args.size()) {
@@ -482,7 +491,10 @@ struct SynthXc2064Pass : public ScriptPass
 			run("flatten");
 			run("tribuf -logic");
 			run("deminout");
-			run("synth -run coarse:fine");
+			// Zustandsautomaten behalten ihre Kodierung (yosys kodiert sonst oft one-hot um: beim XC2064 mit
+			// einem FF je CLB teuer, und die Register hießen nicht mehr wie im RTL)
+			run(fsm || help_mode ? "synth -run coarse:fine" : "synth -nofsm -run coarse:fine",
+			    "(-nofsm unless -fsm)");
 		}
 
 		if (check_label("fine")) {

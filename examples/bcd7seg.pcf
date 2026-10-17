@@ -1,0 +1,16 @@
+# Pin-Zuordnung für bcd7seg.v: set_io <Port> <PLCC68-Pin>
+# Takt, Reset und en oben, die Segmente rechts, die Stellen unten
+set_io clk    P9
+set_io rst    P8
+set_io en     P7
+set_io seg[0] P59
+set_io seg[1] P58
+set_io seg[2] P57
+set_io seg[3] P56
+set_io seg[4] P55
+set_io seg[5] P54
+set_io seg[6] P53
+set_io an[0]  P42
+set_io an[1]  P41
+set_io an[2]  P40
+set_io an[3]  P39

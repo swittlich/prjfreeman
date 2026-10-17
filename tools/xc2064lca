@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""xc2064lca: Konfiguration als Text (Format siehe xc2064db/config.py, von nextpnr mit --vopt out=) -> LCA-Datei
+von XACT, für die Gegenprobe mit MAKEBITS (xc2064db/lca.py, write).
+
+    xc2064lca design.txt -o DESIGN.LCA [--package PC68|PD48|PC44|PG68] [--speed -70]
+
+MAKEBITS übersetzt die LCA-Datei in einen Bitstream, der mit dem von xc2064pack bis auf die Richtung von
+Repowering-Puffern auf unbenutzten Segmenten übereinstimmen soll. DOS kennt nur Namen im 8.3-Format.
+"""
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+from xc2064db import config, graph, lca, packages  # noqa: E402
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("text", help="Konfiguration als Text")
+    ap.add_argument("-o", "--output", required=True, help=".LCA")
+    ap.add_argument("--package", help="Gehäuse (Standard: aus der Textdatei, sonst PC68)")
+    ap.add_argument("--speed", default="-70", help="Geschwindigkeitsstufe wie bei XACT (Standard -70)")
+    args = ap.parse_args()
+
+    db = config.Database()
+    lines = config.parse_text(open(args.text, encoding="utf-8").read())
+    package = (args.package or next((l.name for l in lines if l.kind == "package"), "PC68")).upper()
+    if package not in packages.PACKAGES:
+        sys.exit("xc2064lca: unbekanntes Gehäuse %s (%s)" % (package, ", ".join(packages.PACKAGES)))
+    title = os.path.splitext(os.path.basename(args.output))[0].upper()
+    try:
+        text = lca.write(db, graph.Graph(db.entries, db.lines), lines, "2064" + package, args.speed, title)
+    except ValueError as e:
+        sys.exit("xc2064lca: %s" % e)
+    open(args.output, "w", newline="").write(text)
+    print("xc2064lca: %s -> %s: %d Netze, %d Blöcke" % (
+        os.path.basename(args.text), os.path.basename(args.output), text.count("Addnet "), text.count("Editblk ")),
+        file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

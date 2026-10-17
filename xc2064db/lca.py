@@ -209,3 +209,155 @@ def check_blocks(lca_blocks, items):
                     bad.append((name, "%s = %s stimmt nicht mit LUT%s %s (%s)" % (lut, eq, lut, f["LUT" + lut], f[lut])))
                     break
     return bad
+
+
+# --- Konfiguration -> LCA (Gegenprobe mit MAKEBITS) ---------------------------------------------------
+PIN = re.compile(r"[A-H][A-H]\.[ABCDKXY]|P\d+\.[IOTK]|CLK\.(AA|II)\.[IO]")
+DRIVER = re.compile(r"[A-H][A-H]\.[XY]|PAD\d+\.I|CLK\.(AA|II)\.O")
+
+
+def _equation(ins, table):
+    """Gleichung im Stil von XACT (~, *, +) als Summe der Minterme über die Eingänge ins (Bit i der Tabelle:
+    Eingang k = (i >> k) & 1); None für die Konstante 0"""
+    names = list(dict.fromkeys(ins))
+    terms = []
+    for v in range(1 << len(names)):
+        val = {n: (v >> k) & 1 for k, n in enumerate(names)}
+        if (table >> sum(val[x] << k for k, x in enumerate(ins))) & 1:
+            terms.append("*".join(n if val[n] else "~" + n for n in names))
+    return "+".join("(%s)" % t for t in terms) if terms else None
+
+
+def _clb_block(name, f):
+    """Editblk einer CLB aus den Feldern des Textformats (blocks.parse_fields)"""
+    base, clk = f["BASE"], f["CLK"]
+    uses = {f["X"], f["Y"], f["SET"], f["RES"], clk.split(":")[0]} | ({"F"} if clk else set())
+    out = ["Editblk %s" % name, "Base %s" % base]
+    luts = []
+    if base == "F":  # eine Funktion von 4 Variablen, B = 1 wählt Tabelle F
+        luts.append(("F", f["F"].split(":") + ["B"], int(f["LUTF"], 16) << 8 | int(f["LUTG"], 16)))
+    else:
+        for lut in ("F", "G"):
+            if lut in uses or int(f["LUT" + lut], 16):
+                luts.append((lut, f[lut].split(":"), int(f["LUT" + lut], 16)))
+    cfg = {lut: ":".join(dict.fromkeys(ins)) for lut, ins, _ in luts}
+    fg = "F:%s" % cfg.get("F", "") if base == "F" else "F:%s G:%s" % (cfg.get("F", ""), cfg.get("G", ""))
+    out.append("Config X:%s Y:%s %s Q:%s SET:%s RES:%s CLK:%s " % (
+        f["X"], f["Y"], fg, f["Q"] if clk else "", f["SET"], f["RES"], clk))
+    for lut, ins, table in luts:
+        eq = _equation(ins, table)
+        if eq:
+            out.append("Equate %s = %s" % (lut, eq))
+    return out + ["Endblk"]
+
+
+def _coords(db, g, cn):
+    """G-Lagen ({xGy} bei XACT), die eine Verbindung programmieren; Switch-Matrix: beide Pins nacheinander"""
+    from . import switches
+    if cn.kind in ("pip", "out", "clkout", "junction", "iobi"):
+        return [db.entries[cn.bits[0]].key[0]]
+    if cn.kind == "switch":
+        sm, pins = cn.name.split()
+        return ["%dG%d" % switches.pin_g(g.sm_g[sm], int(p)) for p in pins.split("-")]
+    if cn.kind == "mux":
+        m = db.muxes[cn.b]
+        ent = m.sources[m.codes[cn.code]]
+    elif cn.kind in ("iobo", "iobt"):
+        iob = db.iobs[cn.b.split(".")[0]]
+        lst, codes = (iob.o, iob.omux) if cn.kind == "iobo" else (iob.t, iob.tmux)
+        ent = lst[codes[cn.code]]
+    elif cn.kind == "iobk":
+        km = db.kmuxes[cn.name.split(".")[0]]
+        ent = km.sources[km.codes[cn.code]]
+    elif cn.kind == "clkbuf":
+        cm = db.clkmuxes[cn.name.split()[0]]
+        ent = cm.sources[cm.codes[cn.code]]
+    else:
+        return []
+    if not ent.g:
+        raise ValueError("%s: keine G-Lage bekannt" % cn.name)
+    return [ent.g]
+
+
+def write(db, g, lines, part="2064PC68", speed="-70", title="DESIGN"):
+    """Konfiguration (Zeilen aus config.parse_text, etwa von nextpnr) als LCA für MAKEBITS: je Netz die Pins
+    (Addnet) und die G-Lagen der programmierten Elemente (Program, nur diese liest MAKEBITS), je benutzter CLB
+    bzw. benutztem IOB ein Block mit Base, Config und Equate. Die Netze ergeben sich aus dem Zusammenhang der
+    Verbindungen in den Zeilen, an den Taktpuffern getrennt (CLK.AA.I/CLK.II.I am Netz der Quelle, CLK.AA.O/
+    CLK.II.O am Taktnetz). Die Richtung der Repowering-Puffer und die Optionen legt MAKEBITS selbst fest.
+    Ergebnis: Text mit CRLF. ValueError bei einer Zeile ohne Verbindung im Graphen oder ohne G-Lage."""
+    from . import blocks
+    by_cfg = collections.defaultdict(list)
+    for cn in g.conns:
+        t = g.cfg(cn)
+        if t:
+            by_cfg[t].append(cn)
+    conns = []
+    for l in lines:
+        if l.kind == "switch":
+            a, b = sorted(int(p) for p in l.value.split("-"))
+            key = "switch %s %d-%d" % (l.name, a, b)
+        elif l.kind in ("pip", "mux") and l.value not in ("on", "off"):
+            key = ("%s %s %s" % (l.kind, l.name, l.value)).strip()
+        else:
+            continue
+        if key not in by_cfg:
+            raise ValueError("Zeile %d (%s): keine Verbindung im Graphen" % (l.lineno, key))
+        conns += by_cfg[key][:1]
+    latched = {l.name for l in lines if l.kind == "iob" and blocks.parse_fields(l.value).get("I") == "Q"}
+    conns += [cn for cn in g.conns if cn.kind == "iobkin" and cn.b[:-2] in latched]
+
+    parent = {}
+
+    def find(n):
+        parent.setdefault(n, n)
+        while parent[n] != n:
+            parent[n] = parent[parent[n]]
+            n = parent[n]
+        return n
+
+    buf_out = {"GCLK": "CLK.AA.O", "ACLK": "CLK.II.O"}
+    for cn in conns:
+        if cn.kind == "clkbuf":  # am Puffer getrennt: Pin CLK.AA.I bzw. CLK.II.I am Netz der Quelle
+            parent[find(cn.name.split()[0])] = find(cn.a)
+        else:
+            parent[find(cn.a)] = find(cn.b)
+    for node, pin in buf_out.items():
+        if node in parent:
+            parent[find(pin)] = find(node)
+    members, progs = collections.defaultdict(list), collections.defaultdict(list)
+    for n in list(parent):
+        members[find(n)].append(n)
+    for cn in conns:
+        progs[find(cn.a)].append(_coords(db, g, cn))
+
+    # Pads mit XACTs Namen PADn (unabhängig vom Gehäuse, Pnn hieße bei XACT der Pin des Gehäuses)
+    from .iobmux import pads
+    pad = {p: n for p, _, _, n in pads()}
+    xname = lambda n: re.sub(r"^(P\d+)(?=\.|$)", lambda m: pad[m[1]], n)  # noqa: E731
+    out = [";: %s.LCA (%s%s), xc2064lca (arch/xc2064)" % (title, part, speed), "Version 2",
+           "Design %s 8 0" % part, "Speed %s" % speed]
+    nets = []
+    for r, nodes in members.items():
+        pins = sorted((xname(n) for n in nodes if PIN.fullmatch(n)), key=lambda n: (not DRIVER.fullmatch(n), n))
+        if len(pins) > 1 or progs[r]:
+            nets.append((pins, progs[r]))
+    for k, (pins, prog) in enumerate(sorted(nets)):
+        out.append("Addnet N%d %s " % (k, " ".join(pins)))
+        line = []  # MAKEBITS paart die beiden Pins einer Switch-Matrix nur innerhalb einer Zeile
+        for i, coords in enumerate(prog):
+            line += coords
+            if len(line) >= 32 or i == len(prog) - 1:
+                out.append("Program N%d %s " % (k, " ".join("{%s}" % p for p in line)))
+                line = []
+    tmode = {l.name[:-2]: l.value for l in lines if l.kind == "mux" and l.name.endswith(".T")}
+    for l in lines:
+        if l.kind == "clb":
+            f = dict(blocks.DEFAULT_CLB)
+            f.update(blocks.parse_fields(l.value))
+            out += _clb_block(l.name, f)
+        elif l.kind == "iob":
+            buf = {"on": "ON", "off": ""}.get(tmode.get(l.name, "off"), "TRI")
+            out += ["Editblk %s" % xname(l.name), "Base IO",
+                    "Config I:%s BUF:%s " % (blocks.parse_fields(l.value).get("I", "PAD"), buf), "Endblk"]
+    return "\r\n".join(out) + "\r\n"
