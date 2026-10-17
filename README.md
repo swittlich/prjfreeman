@@ -11,7 +11,8 @@ Grundlagen:
 - Ken Shirriff, [Reverse-engineering the first FPGA chip, the XC2064](https://www.righto.com/2020/09/reverse-engineering-first-fpga-chip.html)
 - sein Bitstream-Decoder [shirriff/xc2064](https://github.com/shirriff/xc2064), aus dessen `clb.js` und `iob.js`
   die Eingangsmultiplexer der CLBs, die Optionen des Speicherelements, die Pad-Tabelle und die
-  Multiplexer und PIPs der IOBs stammen
+  Multiplexer und PIPs der IOBs stammen; der Decoder selbst läuft ohne Browser als Gegenprobe
+  (`tools/xc2064shirriff`, siehe [Regressionstest](#regressionstest))
 - [rates37/openxc2064](https://github.com/rates37/openxc2064) mit Bitstreams aus Xilinx' XACT
 - Xilinx *The Programmable Logic Data Book* 1994 ([bitsavers](https://ftp.mirrorservice.org/sites/www.bitsavers.org/components/xilinx/_dataBooks/1994_Xilinx_Programmable_Logic_Data_Book.pdf)),
   XC2000-Abschnitt S. 2-216 bis 2-222: Lieferformen und die Timing-Tabellen von CLB und IOB (-70, -100, -130)
@@ -127,7 +128,8 @@ statt 11,5 min. Mit den IOBs aus `iob.js` (Stufe 3, Pads an beiden Kanälen) bra
 80 Iterationen, mit dem Timing aus Stufe 4 117. Die Spalte *Routing* des Tests zeigt das. Mit dem
 Rundlauf über den Bitstream (Stufe 5) dauert der ganze Test etwa 4 min, mit `shiftreg.v` und `inreg.v`
 (Stufen 6 und 7) und den Läufen in PD48, PC44 und PG68 (Stufe 8, zusammen 85 Läufe, der längste mit 97
-Iterationen) knapp 4 min, wenn sonst nichts läuft.
+Iterationen) knapp 4 min, wenn sonst nichts läuft. Seit die Läufe parallel laufen (Stufe 9, 10 Jobs),
+braucht der ganze Test mit der Gegenprobe über Shirriffs Decoder knapp 1 min.
 
 ## Ablauf
 
@@ -138,7 +140,7 @@ SEED=1 arch/xc2064/flow.sh                  # mit festem nextpnr-Seed (ohne SEED
 arch/xc2064/flow.sh arch/xc2064/examples/latch_sr.v   # anderes Design
 arch/xc2064/flow.sh --gui                   # mit nextpnr-GUI: Pack, Place, Route über die Werkzeugleiste
 arch/xc2064/test/run.sh                     # Regressionstest (siehe unten)
-arch/xc2064/test/bitstreams.sh              # Datenquellen, xc2064unpack und xc2064pack mit XACT-Bitstreams prüfen
+arch/xc2064/test/bitstreams.sh              # Datenquellen, xc2064unpack, xc2064pack und Shirriffs Decoder mit XACT-Bitstreams prüfen
 nextpnr-himbaechel --device XC2064 --json build/flows/xc2064/blinky.pnr.json --gui   # geroutetes Ergebnis ansehen
 ```
 
@@ -179,7 +181,9 @@ die Debug-Konfigurationen für Architekturen (Run and Debug). Als Namen jeweils 
 mit dem nextpnr-Standard-Seed und den Seeds 1–6, mit und ohne PCF, dazu ohne PCF je einmal in den
 Gehäusen PD48, PC44 und PG68 (Spalte PCF, `PACKAGES=…` ändert die Liste), und prüft jeden Lauf. Zeilen
 `// erwartet: <Zelltyp> <Anzahl>` im Design prüfen schon die Synthese (`shiftreg.v` verlangt 8
-`XC2000_FGM`, fällt der Pass aus, schlägt der Test fehl):
+`XC2000_FGM`, fällt der Pass aus, schlägt der Test fehl). Die Läufe laufen parallel, höchstens
+`TEST_JOBS` gleichzeitig (Standard `JOBS`, nie mehr als 10); die Zeilen erscheinen trotzdem in fester
+Reihenfolge:
 
 | Spalte | Prüfung |
 |---|---|
@@ -187,6 +191,7 @@ Gehäusen PD48, PC44 und PG68 (Spalte PCF, `PACKAGES=…` ändert die Liste), un
 | Netz | Die Netzliste nach dem Routing (`*.pnr.json`, also nach `pack()` mit Eingangstausch, INIT-Permutation und Konstanten) ist formal äquivalent zum RTL |
 | Pips | `test/extract_netlist.py` gewinnt die Netzliste allein aus den belegten Bels und den benutzten Pips zurück, also aus dem, was ein Bitstream festhält. Jeder Eingang muss am Treiber hängen, den die Netzliste von nextpnr vorsieht, keiner darf zwei haben, und kein benutzter Pip darf verwaist sein. Die so gewonnene Netzliste muss ebenfalls äquivalent zum RTL sein. Das deckt Platzierung und Routing mit ab |
 | Bitstream | Rundlauf über den echten Bitstream: nextpnr schreibt die Konfiguration als Text (`--vopt out=`), `xc2064pack` macht daraus eine RBT-Datei, `xc2064unpack` und noch einmal `xc2064pack` geben sie bitgenau wieder, und `xc2064netlist` gewinnt allein aus der RBT-Datei (Namen von Ports und Registern aus der Textdatei) eine Netzliste zurück, die formal äquivalent zum RTL sein muss. Ein verfälschtes LUT-Bit fällt dabei auf |
+| Shirriff | Unabhängige Gegenprobe: Shirriffs Decoder (`tools/xc2064shirriff`) liest die RBT-Datei mit seinem eigenen Leser und muss sie so dekodieren wie das Paket (siehe unten). `-` ohne das Python-Paket `quickjs` |
 | Fmax | Kleinste Frequenz aller Takte. Mit `FMIN=…` (MHz) ist ein Wert darunter ein Fehler |
 | Routing | Iterationen und Laufzeit von router2, nur zur Information |
 
@@ -197,6 +202,32 @@ Konstanten-Zellen, die nextpnr bis Stufe 3 anlegte, `test/pnr_cells.v` (seit Stu
 gewöhnliche LUTs). Ein verändertes INIT-Bit, vertauschte
 LUT-Eingänge, ein umgedrehtes `CLKINV`, ein FF statt Latch, ein gelöster Pip oder ein LUT-Eingang an
 der falschen Quelle fallen jeweils auf.
+
+Die Rundläufe prüfen das Paket mit sich selbst: Ein Fehler, der beim Schreiben und Lesen gleich ist
+(etwa eine falsche Bitreihenfolge der LUTs), fiele dort nicht auf. Deshalb läuft zusätzlich Shirriffs
+Decoder aus `shirriff-xc2064/html` (`draw.js`, `karnaugh.js`, `parse.js`, `iob.js`, `clb.js`) ohne Browser in
+QuickJS (Python-Paket `quickjs`, steht in `.devcontainer/requirements.txt`; `xc2064db/shirriff.py` stellt
+`window`, `$`, `alert` und `assert` bereit). Verglichen werden je Bitstream:
+
+- das Innere aller 64 CLBs: Basis (F, FG, FGM), Eingänge von F und G, beide Wahrheitstabellen, X, Y, FF
+  oder Latch, Set, Reset und Takt. Das ist der unabhängige Teil, denn Shirriff liest diese Bits aus der
+  Bit-Tabelle in Chip-Lage mit eigener Bitreihenfolge, das Paket über die Namen der Bitkarte;
+- die gewählte Quelle der 320 CLB-Eingänge (G-Lage der Kreuzung) und der O-, T- und K-Muxe der IOBs
+  (Index in der Liste von `iob.js`, bei Leitungen auch die G-Lage), dazu gelatchte Eingänge. Diese Tabellen
+  hat das Paket aus `clb.js` und `iob.js` übernommen, der Vergleich prüft die Übernahme;
+- Pips, Switch-Verbindungen und Puffer.
+
+Bekannte Abweichungen rechnet der Vergleich heraus: Beim Takt unterscheidet Shirriff K und G anders als
+XACT (`TEST1.LCA`), verglichen wird nur aus, über C (mit Umkehrung) oder über K bzw. G; in Zeile I
+vertauscht er die Matrizen 8.1 und 8.2; bei Basis F und FGM heißt der gemeinsame Ausgang bei ihm F bzw. M.
+Alle zehn XACT-Bitstreams (`test/bitstreams.sh`) und alle Bitstreams des Regressionstests dekodiert er
+wie das Paket. Dass der Vergleich etwas findet, zeigen zwei Gegenproben: Shirriffs Dekodierung von
+`TEST1.RBT` gegen die eigene von `AND_OR.BIT` ergibt 95 Abweichungen, und zwei vertauschte Codes in der
+Tabelle eines CLB-Eingangs fallen sofort auf.
+
+```bash
+python3 arch/xc2064/tools/xc2064shirriff build/flows/xc2064/test/inreg/pcf-mit-seed-default.rbt
+```
 
 Den hochohmigen Zustand kennt der Vergleich nicht. `test/tristate_split.py` bereitet beide Netzlisten
 deshalb auf: Jeder Tristate-Treiber wird ein Multiplexer mit fester 0 bzw. 1 statt Z, und der Vergleich
@@ -336,6 +367,7 @@ Generator der Chipdb (Namen und Verbindungen) und die Bitstream-Werkzeuge (Bitka
 | `packages` | Gehäuse PC68, PD48, PC44 und PG68: Pin → Pad |
 | `graph` | Routing-Graph: Segmente aus den Trennstellen an den Matrizen und dem Modell der fünften Leitung, Verbindungen aus PIP-, Magic- und Mux-Bits. Der Generator `nextpnr/xc2064_arch_gen.py` baut daraus die Kacheln, `xc2064unpack` prüft daran die Bitstreams |
 | `lca` | `TEST1.LCA` von XACT lesen und gegen Dekodierung und Graph prüfen |
+| `shirriff` | Shirriffs JavaScript-Decoder in QuickJS laden, eine RBT-Datei damit dekodieren und mit der eigenen Dekodierung vergleichen (`tools/xc2064shirriff`) |
 
 Was die Daten über das Original sagen:
 - **Switch-Matrizen:** Die 98 inneren haben dasselbe Muster mit 20 Verbindungen, jeder Pin mit 5 der 7
@@ -490,6 +522,9 @@ arch/xc2064/test/bitstreams.sh                                   # alles für al
      Transparenz D → Q aus T_ITO, Set/Reset → Q aus T_RIO/T_RLO, Bögen nur ohne kombinatorische Schleife)
      und die Gehäuse PC44 und PG68 (Pin-Tabellen beider Data Books verglichen, im Regressionstest je
      Design ein Lauf in PD48, PC44 und PG68)
+  9. erledigt: Regressionstest parallel (höchstens 10 Läufe, 85 Läufe in knapp 1 min) und die
+     unabhängige Gegenprobe mit Shirriffs Decoder (QuickJS, `xc2064shirriff`) in `run.sh` und
+     `bitstreams.sh`: alle XACT-Bitstreams und alle erzeugten Bitstreams dekodiert er wie das Paket
 
   Offen auf dem Weg zum geladenen Chip (alles braucht einen echten XC2064): der erste Versuch mit dem
   STM32-Lader (D/P-Pin), die Codes von `CLK.AA.I`/`CLK.II.I` und die Flanke des IOB-FF (laut Data Book

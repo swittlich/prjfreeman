@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""xc2064shirriff: Gegenprobe eines Bitstreams mit Shirriffs Decoder (shirriff-xc2064/html, in QuickJS ohne
+Browser, siehe xc2064db/shirriff.py). Shirriff liest die RBT-Datei selbst und dekodiert sie; das Ergebnis muss
+zur eigenen Dekodierung passen: das Innere jeder CLB (Basis, Eingänge, Wahrheitstabellen, X/Y, Q, Set/Reset,
+Takt), die gewählten Quellen der CLB-Eingänge, O-, T- und K-Muxe der IOBs, gelatchte Eingänge, Pips,
+Switch-Verbindungen und Puffer.
+
+    xc2064shirriff design.rbt [weitere .rbt/.bit ...]
+
+Endet mit Fehler, wenn etwas abweicht. Braucht das Python-Paket quickjs (.devcontainer/requirements.txt).
+"""
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+from xc2064db import bitstream, config, shirriff  # noqa: E402
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("bitstreams", nargs="+", help=".rbt oder .bit")
+    ap.add_argument("-v", "--verbose", action="store_true", help="alle Abweichungen statt der ersten 10")
+    args = ap.parse_args()
+    if not shirriff.available():
+        sys.exit("xc2064shirriff: Python-Paket quickjs fehlt (pip install quickjs)")
+    db = config.Database()
+    dec = shirriff.Decoder()
+    failed = 0
+    for path in args.bitstreams:
+        raw = bitstream.read(path).raw
+        n, bad = shirriff.compare(db, raw, dec.decode(shirriff.rbt_text(path)))
+        counts = ", ".join("%d %s" % (v, k) for k, v in n.items())
+        print("xc2064shirriff: %s: %s; %s" % (os.path.basename(path), counts,
+                                             "wie Shirriff" if not bad else "%d Abweichungen" % len(bad)),
+              file=sys.stderr)
+        for b in bad if args.verbose else bad[:10]:
+            print("  " + b, file=sys.stderr)
+        failed += bool(bad)
+    sys.exit(1 if failed else 0)
+
+
+if __name__ == "__main__":
+    main()

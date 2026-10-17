@@ -6,6 +6,8 @@
 #   - python3 -m xc2064db: Gegenproben der Datenquellen (Bitkarte, Leitungen, Switch-Matrizen, CLB-Muxe)
 #   - xc2064unpack je Bitstream: jedes programmierte Bit und jeder Mux-Code steht in der Bitkarte
 #   - Rundlauf: xc2064pack macht aus dem Text wieder einen Bitstream, der bitgenau dem Original gleicht
+#   - xc2064shirriff: Shirriffs Decoder (JavaScript in QuickJS) dekodiert jeden Bitstream wie das Paket
+#     (nur mit dem Python-Paket quickjs)
 # Die Textdateien liegen danach unter build/flows/xc2064/test/bitstreams/.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARCH="$(dirname "$HERE")"
@@ -49,6 +51,16 @@ for f in "${files[@]}"; do
 		failed=$((failed + 1))
 	fi
 done
+
+if python3 -c "import quickjs" 2>/dev/null; then
+	log "Gegenprobe mit Shirriffs Decoder (xc2064shirriff)"
+	rc=0
+	python3 "$ARCH/tools/xc2064shirriff" "${files[@]}" 2>"$OUT/shirriff.log" || rc=$?
+	sed 's/^xc2064shirriff: /  /' "$OUT/shirriff.log"
+	[[ $rc -eq 0 ]] || failed=$((failed + 1))
+else
+	warn "Python-Paket quickjs fehlt: keine Gegenprobe mit Shirriffs Decoder (pip install quickjs)"
+fi
 
 log "${#files[@]} Bitstreams, $failed Fehler. Textdateien: $OUT"
 [[ $failed -eq 0 ]]

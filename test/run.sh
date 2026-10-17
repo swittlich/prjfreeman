@@ -12,11 +12,14 @@
 #   Bitstream  Rundlauf über den Bitstream: nextpnr schreibt die Konfiguration als Text (--vopt out=),
 #          xc2064pack macht daraus eine RBT-Datei, xc2064unpack und xc2064pack geben sie bitgenau wieder,
 #          und die allein aus dem Bitstream zurückgewonnene Netzliste (xc2064netlist) ist äquivalent zum RTL
+#   Shirriff  unabhängige Gegenprobe: Shirriffs Decoder (xc2064shirriff, JavaScript in QuickJS) liest die
+#          RBT-Datei selbst und dekodiert CLBs, Muxe, IOBs, Pips und Switch-Matrizen wie das Paket
+#          (- ohne das Python-Paket quickjs)
 #   Fmax   kleinste Frequenz aller Takte nach dem Routing, mit FMIN=… (MHz) ist ein Wert darunter ein Fehler
 #   Routing  Iterationen und Laufzeit von router2 (nur Information)
 # Dazu je Design ein Lauf ohne PCF in jedem weiteren Gehäuse (Spalte PCF: PD48, PC44, PG68).
 # Umgebungsvariablen: SEEDS="1 2 3 4 5 6" (zusätzlich zum nextpnr-Standard), PACKAGES="PD48 PC44 PG68",
-# FREQ=5, FMIN=…, TIMEOUT=300, YOSYS=…, NEXTPNR=…
+# FREQ=5, FMIN=…, TIMEOUT=300, YOSYS=…, NEXTPNR=…, TEST_JOBS (parallele Läufe, Standard JOBS, höchstens 10)
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARCH="$(dirname "$HERE")"
 source "$ARCH/../../scripts/lib.sh"
@@ -57,10 +60,19 @@ gate_json() {
 # equiv <gold.json> <gate.json>: Induktion über die gleichnamigen Register, Takte über clk2fflogic mit
 # ihrer Flanke. Mit Tristate zweimal, hochohmig als 0 und als 1, inout-Ports aufgetrennt
 # (tristate_split.py).
-equiv() {
+# gold_split <gold.json>: die beiden Fassungen des RTL einmal je Design (die Läufe laufen parallel)
+gold_split() {
 	local z n
 	for z in 0 1; do
 		n="$(python3 "$HERE/tristate_split.py" "$1" "${1%.json}-z$z.json" $z)" || return 1
+	done
+	echo "$n" >"${1%.json}.ntri"
+}
+equiv() {
+	local z n
+	[[ -f "${1%.json}.ntri" ]] || gold_split "$1" || return 1
+	n="$(cat "${1%.json}.ntri")"
+	for z in 0 1; do
 		python3 "$HERE/tristate_split.py" "$2" "${2%.json}-z$z.json" $z >/dev/null || return 1
 		"$YOSYS" -q -l "${2%.json}-z$z.equiv.log" -p "
 			read_json ${1%.json}-z$z.json
@@ -92,8 +104,14 @@ make -s -C "$ARCH/yosys"
 mkdir -p "$OUT"
 runs=0
 failed=0
-row() { printf '%-10s %-5s %-8s %-8s %-6s %-6s %-10s %-11s %s\n' "$@"; }
-row Design PCF Seed PnR Netz Pips Bitstream Fmax Routing
+row() { printf '%-10s %-5s %-8s %-8s %-6s %-6s %-10s %-9s %-11s %s\n' "$@"; }
+# Shirriffs Decoder braucht das Python-Paket quickjs; ohne es bleibt die Spalte leer (-)
+SHIRRIFF=1
+python3 -c "import quickjs" 2>/dev/null || {
+	SHIRRIFF=0
+	warn "Python-Paket quickjs fehlt: keine Gegenprobe mit Shirriffs Decoder (pip install quickjs)"
+}
+row Design PCF Seed PnR Netz Pips Bitstream Shirriff Fmax Routing
 # bitstream <run>: Text -> RBT -> (unpack -> pack bitgenau) -> Netzliste -> Vergleich mit dem RTL
 bitstream() {
 	local t="$ARCH/tools"
@@ -113,7 +131,7 @@ pnr_run() {
 	XC2064_EXTRACT="$run.extracted.v" timeout "$TIMEOUT" "$NEXTPNR" --device XC2064 --json "$dir/$name.json" \
 		--write "$run.pnr.json" -l "$run.nextpnr.log" --freq "${FREQ:-5}" --timing-allow-fail \
 		--vopt "out=$run.cfg.txt" --post-route "$HERE/extract_netlist.py" "$@" >"$run.out" 2>&1 || rc=$?
-	local pnr=ok net=- pips=- bit=- f=
+	local pnr=ok net=- pips=- bit=- shir=- f=
 	if [[ $rc -eq 124 ]]; then
 		pnr=Timeout
 	elif [[ $rc -ne 0 ]]; then
@@ -130,9 +148,13 @@ pnr_run() {
 		}
 		bit=ok
 		bitstream "$run" || bit=FEHLER
+		if [[ $SHIRRIFF -eq 1 && -f "$run.rbt" ]]; then
+			shir=ok
+			python3 "$ARCH/tools/xc2064shirriff" "$run.rbt" 2>"$run.shirriff.log" || shir=FEHLER
+		fi
 	fi
 	local bad=0
-	[[ $pnr == ok && $net == ok && $pips == ok && $bit == ok ]] || bad=1
+	[[ $pnr == ok && $net == ok && $pips == ok && $bit == ok && $shir != FEHLER ]] || bad=1
 	if [[ -n "${FMIN:-}" && -n "$f" ]] && awk -v f="$f" -v m="$FMIN" 'BEGIN { exit !(f < m) }'; then
 		f="$f<$FMIN"
 		bad=1
@@ -141,9 +163,17 @@ pnr_run() {
 	local it t
 	it="$(grep -o 'iter=[0-9]*' "$run.nextpnr.log" 2>/dev/null | tail -1 | cut -d= -f2 || true)"
 	t="$(grep -o 'Router2 time [0-9.]*' "$run.nextpnr.log" 2>/dev/null | awk '{ printf "%.0f", $3 }' || true)"
-	row "$name" "$m" "$s" "$pnr" "$net" "$pips" "$bit" "${f:+$f MHz}" "${it:+$it It. ${t:-?} s}"
-	runs=$((runs + 1))
-	failed=$((failed + bad))
+	row "$name" "$m" "$s" "$pnr" "$net" "$pips" "$bit" "$shir" "${f:+$f MHz}" "${it:+$it It. ${t:-?} s}"
+	echo "$bad" >"$run.bad"
+}
+
+# Warteschlange der Läufe (je Lauf Design-Verzeichnis, Name, Gold, Lauf, Spalten, Optionen getrennt durch \x1f)
+q_dir=() q_name=() q_gold=() q_run=() q_m=() q_s=() q_opts=()
+queue() {
+	q_dir+=("$dir") q_name+=("$name") q_gold+=("$gold") q_run+=("$1") q_m+=("$2") q_s+=("$3")
+	shift 3
+	local IFS=$'\x1f'
+	q_opts+=("$*")
 }
 
 for d in "${designs[@]}"; do
@@ -171,7 +201,8 @@ for d in "${designs[@]}"; do
 		continue
 	fi
 	gold="$dir/gold.json"
-	if ! gold_json "$d" "$gold"; then
+	rm -f "${gold%.json}".*
+	if ! gold_json "$d" "$gold" || ! gold_split "$gold"; then
 		row "$name" - - "RTL für den Vergleich nicht lesbar (${gold%.json}.log)"
 		runs=$((runs + 1))
 		failed=$((failed + 1))
@@ -185,14 +216,56 @@ for d in "${designs[@]}"; do
 			opts=()
 			[[ $m == mit ]] && opts+=(--vopt "pcf=$pcf")
 			[[ $s != default ]] && opts+=(--seed "$s")
-			pnr_run "$dir/pcf-$m-seed-$s" "$m" "$s" "${opts[@]}"
+			queue "$dir/pcf-$m-seed-$s" "$m" "$s" "${opts[@]}"
 		done
 	done
 	# die anderen Gehäuse: ohne PCF mit dem Standard-Seed (der Placer nimmt nur bebondete Pads)
 	for pkg in $PACKAGES; do
-		pnr_run "$dir/package-$pkg" "$pkg" default --vopt "package=$pkg"
+		queue "$dir/package-$pkg" "$pkg" default --vopt "package=$pkg"
 	done
 done
 
-log "$runs Läufe, $failed fehlgeschlagen. Logs: $OUT"
+# Läufe parallel, höchstens TEST_JOBS gleichzeitig (Standard JOBS, nie mehr als 10). Jeder Lauf schreibt seine
+# Zeile in eine Datei; ausgegeben wird in der Reihenfolge der Warteschlange, sobald alle vorherigen fertig sind.
+TEST_JOBS="${TEST_JOBS:-$JOBS}"
+[[ $TEST_JOBS -le 10 ]] || TEST_JOBS=10
+rows="$OUT/.rows"
+rm -rf "$rows"
+mkdir -p "$rows"
+n=${#q_run[@]}
+next=0
+flush() {
+	while [[ $next -lt $n && -e "$rows/$next.done" ]]; do
+		if [[ -s "$rows/$next.row" && -f "${q_run[next]}.bad" ]]; then
+			cat "$rows/$next.row"
+			failed=$((failed + $(cat "${q_run[next]}.bad")))
+		else
+			row "${q_name[next]}" "${q_m[next]}" "${q_s[next]}" "abgebrochen (${q_run[next]}.*)"
+			failed=$((failed + 1))
+		fi
+		runs=$((runs + 1))
+		next=$((next + 1))
+	done
+}
+for ((i = 0; i < n; i++)); do
+	while [[ $(jobs -rp | wc -l) -ge $TEST_JOBS ]]; do
+		wait -n || true
+		flush
+	done
+	(
+		dir="${q_dir[i]}" name="${q_name[i]}" gold="${q_gold[i]}"
+		IFS=$'\x1f' read -r -a opts <<<"${q_opts[i]}" || true
+		pnr_run "${q_run[i]}" "${q_m[i]}" "${q_s[i]}" "${opts[@]}" >"$rows/$i.row" 2>/dev/null || true
+		touch "$rows/$i.done"
+	) &
+	flush
+done
+while [[ $(jobs -rp | wc -l) -gt 0 ]]; do
+	wait -n || true
+	flush
+done
+flush
+rm -rf "$rows"
+
+log "$runs Läufe, $failed fehlgeschlagen ($TEST_JOBS parallel). Logs: $OUT"
 [[ $failed -eq 0 ]]
