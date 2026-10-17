@@ -34,7 +34,7 @@
 #     Konstanten:     keine Leitung (wie im Original); pack() faltet sie in LUT-Inhalte oder setzt eine LUT ein
 #   Repowering-Puffer an den Sektionsgrenzen sind kein Pip: ein Puffer ist nie aus, seine Richtung folgt aus
 #   dem Routing (xc2064db.graph.bidi_bit).
-#   Timing: CLB und IOB aus dem Data Book 1994 (Stufen -70, -100, -130, dazu -50 abgeleitet), Interconnect
+#   Timing: CLB und IOB aus den Data Books 1993 und 1994 (Stufen -50, -70, -100, -130), Interconnect
 #   als RC-Modell wie im Datenblatt (Interconnect Performance), siehe DATABOOK und set_timings().
 from os import path
 import re
@@ -353,17 +353,17 @@ class Builder:
 
 
 # --- Timing ----------------------------------------------------------------------------------------
-# Werte aus dem Xilinx Programmable Logic Data Book 1994, XC2000 "CLB Switching Characteristic Guidelines"
-# (S. 2-221) und "IOB Switching Guidelines" (S. 2-222), in ns, Maximalwerte. Die Stufe ist die Umlaufrate
-# eines FF in MHz. Die Tabellen von 1994 haben -70, -100, -130; den XC2064 gab es auch als -50 (im PD48
-# nur so, S. 2-216). Dessen Werte stehen erst in älteren Data Books, bis dahin -70 mal 70/50.
+# Werte aus dem Xilinx Programmable Logic Data Book, XC2000 "CLB Switching Characteristic Guidelines" und
+# "IOB Switching Guidelines", in ns, Maximalwerte. Die Stufe ist die Umlaufrate eines FF in MHz. -50 aus
+# dem Data Book 1993 (S. 2-213, 2-214; den XC2064 im PD48 gab es nur so, S. 2-208), -130 aus dem von 1994
+# (S. 2-221, 2-222). -70 und -100 stehen in beiden gleich.
 DATABOOK = {
     #       T_ILO T_QLO T_CKO T_ICK T_CCO T_CIO T_PID T_OP T_THZ T_TON
+    "50": (15.0, 8.0, 15.0, 9.0, 19.0, 27.0, 8.0, 12.0, 20.0, 20.0),
     "70": (10.0, 6.0, 10.0, 7.0, 13.0, 20.0, 6.0, 9.0, 15.0, 15.0),
     "100": (8.0, 6.0, 7.0, 6.0, 9.0, 13.0, 4.0, 7.0, 11.0, 13.0),
     "130": (5.5, 3.7, 7.0, 2.5, 7.0, 13.0, 3.5, 5.5, 7.0, 11.0),
 }
-DATABOOK["50"] = tuple(v * 70 / 50 for v in DATABOOK["70"])  # abgeleitet, siehe oben
 
 
 def clb_timing(t):
