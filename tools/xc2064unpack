@@ -42,7 +42,7 @@ def main():
     outside = [it for it in conns if not any(b in by_bit for b in it.bits)]
     print("xc2064unpack: %d von %d Pips und Switch-Verbindungen im Routing-Graphen%s" % (
         len(conns) - len(outside), len(conns),
-        " (übrige an IOB-Leitungen, Stufe 3: %s)" % " ".join(it.name for it in outside[:4]) if outside else ""),
+        " (fehlen: %s)" % " ".join(it.name for it in outside[:4]) if outside else ""),
         file=sys.stderr)
     for n in bs.notes:
         print("xc2064unpack: Hinweis: " + n, file=sys.stderr)

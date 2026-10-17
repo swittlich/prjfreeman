@@ -1,10 +1,10 @@
 # Chip-Datenbank für ein Modell des Xilinx XC2064 (1985, das erste FPGA) als Himbächel-uarch.
 #
 # Grundlagen: XC2000-Datenblatt; Ken Shirriffs Reverse Engineering (github.com/shirriff/xc2064, als
-# Submodule shirriff-xc2064) mit der Bitkarte XC2064-def.txt, den Leitungsnamen (draw.js) und den
-# CLB-Eingangs-Muxen (clb.js). Das Paket xc2064db (arch/xc2064/xc2064db) liest diese Daten; der
-# Routing-Graph des CLB-Felds entsteht aus xc2064db.graph, jeder Pip dort entspricht einem Bit bzw. einem
-# Mux-Code des Originals. Die IOBs hängen noch vereinfacht am Randkanal (Stufe 3, siehe README).
+# Submodule shirriff-xc2064) mit der Bitkarte XC2064-def.txt, den Leitungsnamen (draw.js), den
+# CLB-Eingangs-Muxen (clb.js) und den IOB-Muxen (iob.js). Das Paket xc2064db (arch/xc2064/xc2064db) liest
+# diese Daten; der Routing-Graph entsteht aus xc2064db.graph, jeder Pip dort entspricht einem Bit bzw.
+# einem Mux-Code des Originals (Ausnahmen: Konstanten und Taktpuffer, Stufe 4, siehe README).
 #
 # Raster (x, y; y nach unten): 8x8 CLBs bei x, y = 1..8 und ein IO-Ring bei 0 bzw. 9. Shirriffs 9x9
 # Kacheln AA..II (Zeile, Spalte) entsprechen x = Spalte, y = Zeile = 1..9: jede enthält die Kanäle
@@ -27,8 +27,11 @@
 #     Ausgänge:       X (Zeile io6) und Y (Zeile y) über ihre PIP-Bits in den Kanal rechts, X fest an A/B
 #                     der CLB darunter und C/D der CLB darüber, Y fest an B der CLB rechts
 #     Takt:           GCLK (col.*.clk) auf B und K, ACLK (row.I.clk) über die senkrechten long.2 auf K
-#   Übergangsweise (Stufe 3/4): IOBs am Randkanal parallel zum Rand (4 Einzelsegmente, 2 Long Lines),
-#   Direktverbindungen zu den Pads wie bisher, Taktpuffer fest an P9 (GCLK) und P43 (ACLK), Konstanten.
+#     IOBs (iob.js):  O-Mux (Leitungen, X/Y der Rand-CLB, GCLK an P9) und T-Mux (2 Einzelsegmente, 2 Long
+#                     Lines; Puffer aus/an ist Konfiguration, kein Pip), I über PIP-Bits auf die Leitungen
+#                     beider Kanäle am Pad und fest an die Eingänge der Rand-CLB
+#   Übergangsweise (Stufe 4): Taktpuffer fest an P9 (GCLK) und P43 (ACLK), Konstanten GND/VCC auf die
+#   CLB-Eingänge und den IOB-Ausgang I.
 from os import path
 import re
 import sys
@@ -43,7 +46,6 @@ N_CLB = 8
 X = N_CLB + 2
 Y = N_CLB + 2
 LAST = N_CLB + 1           # Index der 9. Switch-Matrix-Spalte/-Zeile
-TRACKS = [(m, k) for m in range(2) for k in range(2)]  # IOB-Zugänge: local.1-4 des Randkanalstücks
 LETTERS = "ABCDEFGHI"
 GCLK_PIN, ACLK_PIN = "P9", "P43"
 
@@ -73,36 +75,22 @@ PADS = [
 
 
 def pad_info(pin, tile, style):
-    """Kachel (x, y), z, Seite und das Kanalstück (Seite, Index) eines Pads im Modellraster."""
+    """Kachel (x, y), z und Seite eines Pads im Modellraster; z = 1 für das zweite Pad einer Kachel
+    ("topright", "rightlower", ...)"""
     r, c = LETTERS.index(tile[0]) + 1, LETTERS.index(tile[1]) + 1
-    second = style in ("topright", "bottomright", "rightlower", "leftlower")
-    z = 1 if second else 0
+    z = 1 if style in ("topright", "bottomright", "rightlower", "leftlower") else 0
     if style.startswith("top"):
-        side, x, y, idx = "T", c, 0, c
+        side, x, y = "T", c, 0
     elif style.startswith("bottom"):
-        side, x, y, idx = "B", c, LAST, c
+        side, x, y = "B", c, LAST
     elif style.startswith("right"):
-        side, x, y, idx = "R", LAST, r, r
+        side, x, y = "R", LAST, r
     else:
-        side, x, y, idx = "L", 0, r, r
-    # Kanalstück parallel zum Rand: das zweite Pad einer Kachel ("topright", "rightlower", ...) hängt
-    # am Stück der vorherigen CLB (Shirriffs iob.js: clbw-Spalten bzw. Zeilen der vorherigen Reihe)
-    seg = idx - 1 if second else idx
-    return dict(pin=pin, x=x, y=y, z=z, side=side, seg=seg)
+        side, x, y = "L", 0, r
+    return dict(pin=pin, x=x, y=y, z=z, side=side)
 
 
 PAD_INFO = [pad_info(*p) for p in PADS]
-
-# Direktverbindungen zwischen Rand-CLB und IOB (übergangsweise wie bisher): (Seite, z, Richtung, Draht).
-# "in": Eingang vom Pad -> CLB-Pins (Quelle pad:L/T/B im Graphen), "out": X der CLB -> Ausgang zum Pad.
-PAD_DIRECT = [
-    ("L", 1, "in", "PL"),     # leftlower -> B
-    ("T", 0, "in", "PT"),     # topleft -> A, B
-    ("B", 0, "in", "PB"),     # bottomleft -> C, D
-    ("T", 1, "out", "IO1_X"), # X -> topright
-    ("B", 1, "out", "IO1_X"), # X -> bottomright
-    ("R", 0, "out", "IO0_X"), # X (und Y) -> rightupper
-]
 
 
 def is_clb(x, y):
@@ -118,27 +106,21 @@ def is_io(x, y):
                                  or (x == 0 and 1 <= y <= N_CLB) or (y == 0 and 1 <= x <= LAST))
 
 
-def edge_pad(side, z, seg):
-    """Pad z am Randkanalstück (side, seg), falls es das Pad gibt."""
-    return next((p for p in PAD_INFO if p["side"] == side and p["z"] == z and p["seg"] == seg), None)
-
-
-def edge_clb(side, seg):
-    """Rand-CLB neben dem Randkanalstück (side, seg)."""
-    return {"L": (1, seg), "R": (N_CLB, seg), "T": (seg, 1), "B": (seg, N_CLB)}[side]
-
-
 def tile_xy(t):
-    """Kachel 'BC' (Zeile B, Spalte C) -> (x, y)"""
-    return LETTERS.index(t[1]) + 1, LETTERS.index(t[0]) + 1
+    """Kachel 'BC' (Zeile B, Spalte C) -> (x, y); '@' ist die Pad-Reihe oben bzw. links (0)"""
+    return ord(t[1]) - ord("@"), ord(t[0]) - ord("@")
 
 
 def tile_name(x, y):
-    return LETTERS[y - 1] + LETTERS[x - 1]
+    return chr(ord("@") + y) + chr(ord("@") + x)
+
+
+PAD_BY_PIN = {p["pin"]: p for p in PAD_INFO}
+PAD_SIDE = {p[0]: p[2][0].upper() for p in PADS}  # T, B, L, R
 
 
 # --- Drahtnamen ---------------------------------------------------------------------------------
-REL = {(0, 0): "", (1, 0): "_R", (-1, 0): "_L", (0, -1): "_U", (0, 1): "_D"}
+REL = {(0, 0): "", (1, 0): "_R", (-1, 0): "_L", (0, -1): "_U", (0, 1): "_D", (-1, 1): "_LD", (1, -1): "_RU"}
 
 
 def wire_name(node, t):
@@ -147,8 +129,14 @@ def wire_name(node, t):
     rechts). CLB-Pins heißen wie der Pin, X/Y der Nachbar-CLBs XT (X darüber), XB (X darunter), YL (Y links)."""
     if node in ("GCLK", "ACLK"):
         return node
-    if node.startswith("pad:"):
-        return {"pad:T": "PT", "pad:L": "PL", "pad:B": "PB"}[node]
+    m = re.fullmatch(r"(P\d+)\.([IOT])", node)
+    if m:  # IOB: in der eigenen Kachel die Bel-Drähte (Bel-Pin I = XACT .O), in der CLB der Direkteingang
+        p = PAD_BY_PIN[m[1]]
+        if tile_xy(t) == (p["x"], p["y"]):
+            return "IO%d_%s" % (p["z"], {"O": "I", "I": "O", "T": "T"}[m[2]])
+        if m[2] != "I":
+            raise ValueError("%s außerhalb der Pad-Kachel" % node)
+        return "P" + PAD_SIDE[m[1]]
     m = re.fullmatch(r"([A-H])([A-H])\.([ABCDKXY])", node)
     if m:
         d = (ord(m[2]) - ord(t[1]), ord(m[1]) - ord(t[0]))
@@ -169,6 +157,12 @@ def wire_name(node, t):
 
 def place(cn):
     """Kachel, in der der Pip einer Verbindung liegt"""
+    if cn.kind in ("iobo", "iobt"):  # IOB: in der Kachel des Pads
+        p = PAD_BY_PIN[cn.b.split(".")[0]]
+        return tile_name(p["x"], p["y"])
+    if cn.kind == "iobi":
+        p = PAD_BY_PIN[cn.a.split(".")[0]]
+        return tile_name(p["x"], p["y"])
     if cn.kind == "mux":
         return cn.b[:2]
     if cn.kind == "out":
@@ -184,8 +178,10 @@ def place(cn):
 def timing_class(cn):
     if cn.kind == "switch":
         return "SM"
-    if cn.kind in ("mux", "out"):
-        return "INMUX" if cn.kind == "mux" else "OUTDRV"
+    if cn.kind in ("mux", "iobo", "iobt"):
+        return "INMUX"
+    if cn.kind in ("out", "iobi"):
+        return "OUTDRV"
     if ".long." in cn.a or ".long." in cn.b or "CLK" in cn.a or "CLK" in cn.b:
         return "LONGDRV"
     return "PIP"
@@ -223,7 +219,7 @@ class Builder:
         for cn in self.graph.conns:
             t = place(cn)
             xy = tile_xy(t)
-            a, b = wire_name(cn.a, t), wire_name(cn.b, t)
+            a, b = wire_name(cn.a, t) if not self.direct_xy(cn) else self.direct_xy(cn), wire_name(cn.b, t)
             for n, w in ((cn.a, a), (cn.b, b)):
                 self.wire(xy, w, "ROUTING")
                 self.node(n, xy, w)
@@ -231,6 +227,13 @@ class Builder:
             self.pip(xy, a, b, cls)
             if cn.kind in ("pip", "switch", "junction"):  # Pass-Transistor: beide Richtungen
                 self.pip(xy, b, a, cls)
+
+    @staticmethod
+    def direct_xy(cn):
+        """X/Y einer Rand-CLB direkt im Ausgangs-Mux eines IOB: Draht IO<z>_X/Y in der Pad-Kachel"""
+        if cn.kind == "iobo" and re.fullmatch(r"[A-H][A-H]\.[XY]", cn.a):
+            return "IO%d_%s" % (PAD_BY_PIN[cn.b.split(".")[0]]["z"], cn.a[-1])
+        return None
 
     def clb(self, x, y):
         """Bels und interne Pips einer CLB"""
@@ -274,8 +277,9 @@ class Builder:
                 self.pip(xy, s, o, "LOCAL")
 
     def iob(self, p):
-        """IOB-Pad, übergangsweise am Randkanalstück parallel zum Rand (Stufe 3: iob.js)"""
-        xy, z, side = (p["x"], p["y"]), p["z"], p["side"]
+        """IOB-Pad: Bel und Drähte. Seine Muxe und Pips kommen aus dem Graphen (iob.js, routing()); der
+        Modus an/aus/Tristate folgt aus dem Zelltyp (pack() in xc2064.cc), T hat daher keine Konstanten."""
+        xy, z = (p["x"], p["y"]), p["z"]
         for w in ("GND", "VCC"):
             self.wire(xy, w, w)
         for sfx, typ in (("I", "IO_I"), ("T", "IO_T"), ("O", "IO_O"), ("PAD", "IO_PAD")):
@@ -284,60 +288,18 @@ class Builder:
         self.bels.setdefault(xy, []).append((p["pin"], "IOB", z, [
             ("I", "IO%d_I" % z, PinType.INPUT), ("T", "IO%d_T" % z, PinType.INPUT),
             ("O", "IO%d_O" % z, PinType.OUTPUT), ("PAD", "IO%d_PAD" % z, PinType.INOUT)]))
-        seg = LETTERS[p["seg"] - 1]
-        line = {"T": "row.A.local.%d@" + seg, "B": "row.I.local.%d@" + seg,
-                "L": "col.A.local.%d@" + seg, "R": "col.I.local.%d@" + seg}[side]
-        longs = {"T": ["row.A.long.2", "row.A.long.3"], "B": ["row.I.long.1", "row.I.long.2"],
-                 "L": ["col.A.long.2", "col.A.long.3"], "R": ["col.I.long.1", "col.I.long.2"]}[side]
-        access = []
-        for i, (m, k) in enumerate(TRACKS):
-            w = "IO%d_T%d%d" % (z, m, k)
-            self.wire(xy, w, "PAD_ACCESS")
-            self.node(line % (i + 1), xy, w)
-            access.append(w)
-        for i, n in enumerate(longs):
-            w = "IO%d_L%d" % (z, i)
-            self.wire(xy, w, "PAD_ACCESS")
-            self.node(n, xy, w)
-            access.append(w)
-        for c in access:
-            self.pip(xy, c, "IO%d_I" % z, "INMUX")
-            self.pip(xy, "IO%d_O" % z, c, "OUTDRV")
-            self.pip(xy, c, "IO%d_T" % z, "INMUX")
-        for c in ("GND", "VCC"):
+        for c in ("GND", "VCC"):  # konstanter Ausgang (übergangsweise, Stufe 4: Konstanten)
             self.pip(xy, c, "IO%d_I" % z, "")
-            self.pip(xy, c, "IO%d_T" % z, "")
-        # Direktverbindungen: X (rechts auch Y) der Rand-CLB in den Ausgangsmultiplexer, Pad -> CLB
-        for dside, dz, d, w in PAD_DIRECT:
-            if (dside, dz) != (side, z):
-                continue
-            cx, cy = edge_clb(side, p["seg"])
-            clb = tile_name(cx, cy)
-            if d == "out":
-                outs = ["X", "Y"] if side == "R" else ["X"]
-                for o in outs:
-                    self.wire(xy, "IO%d_%s" % (z, o), "DIRECT")
-                    self.node("%s.%s" % (clb, o), xy, "IO%d_%s" % (z, o))
-                    self.pip(xy, "IO%d_%s" % (z, o), "IO%d_I" % z, "INMUX")
-            else:
-                self.node("pad:%s@%s" % (side, clb), xy, "IO%d_O" % z)
-        # Taktpuffer an den Pads P9 (GCLK) und P43 (ACLK), übergangsweise ohne die Puffer-Muxe
+        # Taktpuffer an den Pads P9 (GCLK) und P43 (ACLK), übergangsweise ohne die Puffer-Muxe (Stufe 4)
         if p["pin"] in (GCLK_PIN, ACLK_PIN):
             net = "GCLK" if p["pin"] == GCLK_PIN else "ACLK"
             self.wire(xy, net + "_SRC", "GCLK")
             self.node(net, xy, net + "_SRC")
             self.pip(xy, "IO%d_O" % z, net + "_SRC", "GCLK")
 
-    def pad_direct_nodes(self):
-        """pad:T/L/B im Graphen gehören je CLB zu ihrem Rand-Pad: Knoten je CLB umbenennen"""
-        for node in [n for n in self.node_wires if n in ("pad:T", "pad:L", "pad:B")]:
-            for x, y, w in self.node_wires.pop(node):
-                self.node_wires.setdefault("%s@%s" % (node, tile_name(x, y)), []).append((x, y, w))
-
     def build(self):
         ch = self.ch
         self.routing()
-        self.pad_direct_nodes()
         for x in range(X):
             for y in range(Y):
                 if is_clb(x, y):

@@ -82,30 +82,34 @@ def main():
     print("Routing-Graph (xc2064db.graph)")
     g = graph.Graph(entries, lines)
     kc = collections.Counter(c.kind for c in g.conns)
-    print("  %s; nicht erfasst: %s" % (", ".join("%s %d" % kv for kv in sorted(kc.items())),
-                                       ", ".join("%d %s" % (n, k) for k, n in g.skipped.items())))
+    print("  %s" % ", ".join("%s %d" % kv for kv in sorted(kc.items())))
+    check(not g.skipped, "jedes PIP-Bit gehört zu einer Verbindung des Graphen %s" % list(g.skipped)[:4])
+    print("  nicht modelliert (iob.js): %s" % ", ".join("%s %s" % (p, s) for p, s, _ in g.unmodelled))
     print("TEST1.LCA (XACT) gegen TEST1.RBT")
     nets = lca.parse()
     raw = bitstream.read(sources.TEST1_RBT).raw
-    items, _ = config.decode(config.Database(), raw)
-    missing, count = lca.check_elements(nets, items)
-    iob_pips = [n for n in missing.get("pip", []) if ".local.0:row.A" in n]  # T-Mux von P59 (IOB, Stufe 3)
-    other = sum(len(v) for v in missing.values()) - len(iob_pips)
-    check(other == 0, "alle %d Routing-Elemente von XACT stehen in der Dekodierung (%d an IOBs, Stufe 3) %s"
-          % (sum(count.values()) - count["iob"], count["iob"] + len(iob_pips), dict(missing) if other else ""))
-    res = lca.check_nets(nets, g, raw)
+    db = config.Database()
+    items, problems = config.decode(db, raw)
+    missing, count = lca.check_elements(nets, items, db)
+    n = sum(count.values())
+    check(not missing, "alle %d Routing-Elemente von XACT stehen in der Dekodierung (davon %d Takt gelatchter "
+          "IOBs, nicht dekodiert; %d T-Eingänge mit Puffer aus/an) %s"
+          % (n, count["iob-k"], count["mux-mode"], dict(missing) if missing else ""))
+    skip = {it.name for it in items if it.kind == "mux" and it.name.endswith(".T") and it.value in ("off", "on")}
+    res = lca.check_nets(nets, g, raw, skip)
     ok = [r[0] for r in res if r[2] == "ok" and len(r[1]) > 1]
     bad = [r for r in res if r[2] not in ("ok", "ohne CLB-Pins", "getrennt")]
     split = [r[0] for r in res if r[2] == "getrennt"]
     check(not bad and set(split) <= {"CB", "DB"},
-          "der Graph verbindet die CLB-Pins der Netze %s wie XACT und trennt alle Netze (CB, DB hat XACT "
-          "nicht geroutet) %s" % (" ".join(ok), bad or ""))
+          "der Graph verbindet die Pins der Netze %s wie XACT und trennt alle Netze (CB, DB hat XACT "
+          "nicht geroutet) %s %s" % (" ".join(ok), bad or "", [r[:2] for r in res if r[2] == "getrennt"]))
 
-    decoded = kinds["pip"] + kinds["switch"] + kinds["clbmux"]
-    named = sum(kinds[k] for k in ("clb", "iob", "iobmux", "clkmux", "other"))
+    iob_ot = sum(1 for e in entries if e.kind == "iobmux" and e.key[1] in "OT")
+    decoded = kinds["pip"] + kinds["switch"] + kinds["clbmux"] + iob_ot
+    named = sum(kinds[k] for k in ("clb", "iob", "iobmux", "clkmux", "other")) - iob_ot
     print("Abdeckung der %d benutzten Bits:" % (bitmap.NBITS - kinds["unused"]))
-    print("  dekodiert (Pip, Switch, CLB-Eingang): %d" % decoded)
-    print("  nur benannt (LUT, FF, X/Y, IOB, Taktpuffer, Other): %d" % named)
+    print("  dekodiert (Pip, Switch, CLB-Eingang, IOB-Ausgang und -Tristate): %d" % decoded)
+    print("  nur benannt (LUT, FF, X/Y, IOB-Latch und -Takt, Taktpuffer, Other): %d" % named)
     print("  offen (Bidi): %d" % kinds["bidi"])
     if failed:
         print("%d Gegenproben fehlgeschlagen" % len(failed))

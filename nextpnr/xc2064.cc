@@ -19,9 +19,7 @@
 #include <algorithm>
 #include <array>
 #include <fstream>
-#include <set>
 #include <sstream>
-#include <tuple>
 
 #include "himbaechel_api.h"
 #include "log.h"
@@ -101,16 +99,9 @@ struct Xc2064Impl : HimbaechelAPI
         h.init(ctx);
         HimbaechelAPI::init(ctx);
         // Pads nach PLCC68-Pin (Bel-Name) und die beiden Taktpins
-        for (BelId bel : ctx->getBels()) {
-            if (ctx->getBelType(bel) != id_IOB)
-                continue;
-            pad_bels[ctx->getBelName(bel)[1]] = bel;
-            // Randkanalstück, an dem das IOB hängt (wie pad_info() im Generator), für die Grafik
-            Loc l = ctx->getBelLocation(bel);
-            char side = io_side(l);
-            int idx = (side == 'T' || side == 'B') ? l.x : l.y;
-            iob_slots.insert({side, idx - l.z, l.z});
-        }
+        for (BelId bel : ctx->getBels())
+            if (ctx->getBelType(bel) == id_IOB)
+                pad_bels[ctx->getBelName(bel)[1]] = bel;
         clock_pads = {pad_bels.at(ctx->id("P9")), pad_bels.at(ctx->id("P43"))};
     }
 
@@ -268,6 +259,55 @@ struct Xc2064Impl : HimbaechelAPI
                      storage_elements(next->first).c_str());
     }
 
+    // Konstantes T ist im Original kein Signal, sondern der Modus des IOB (T-Mux "an" bzw. "aus", iob.js):
+    // der Routing-Graph hat dafür keine Pips. T = 0 (Treiber immer an) wird zu XC2000_OUTBUF, beim
+    // XC2000_IOBUF lesen die Nutzer von O dann direkt I. T = 1 (Treiber aus) wird zu XC2000_INBUF, beim
+    // XC2000_TOBUF bleibt das Pad damit ein Eingang ohne Nutzer.
+    void fold_constant_tristate()
+    {
+        int on = 0, off = 0;
+        for (auto &cell : ctx->cells) {
+            CellInfo *ci = cell.second.get();
+            if (!ci->type.in(id_XC2000_TOBUF, id_XC2000_IOBUF))
+                continue;
+            NetInfo *t = ci->getPort(id_T);
+            const CellInfo *drv = t ? t->driver.cell : nullptr;
+            if (!drv || !drv->type.in(ctx->id("GND"), ctx->id("VCC")))
+                continue;
+            bool always_on = drv->type == ctx->id("GND");
+            ci->disconnectPort(id_T);
+            ci->ports.erase(id_T);
+            if (always_on) {
+                NetInfo *i = ci->getPort(id_I), *o = ci->getPort(id_O);
+                if (o) {
+                    if (!i)
+                        log_error("%s: Tristate-Puffer mit T = 0, aber ohne Eingang I\n", ctx->nameOf(ci));
+                    std::vector<PortRef> users;
+                    for (auto &u : o->users)
+                        users.push_back(u);
+                    for (auto &u : users) {
+                        u.cell->disconnectPort(u.port);
+                        u.cell->connectPort(u.port, i);
+                    }
+                    ci->disconnectPort(id_O);
+                    ci->ports.erase(id_O);
+                }
+                ci->type = id_XC2000_OUTBUF;
+                on++;
+            } else {
+                ci->disconnectPort(id_I);
+                ci->ports.erase(id_I);
+                if (!ci->ports.count(id_O))
+                    ci->addOutput(id_O);
+                ci->type = id_XC2000_INBUF;
+                off++;
+            }
+        }
+        if (on || off)
+            log_info("Tristate buffers with constant T: %d always driving (OUTBUF), %d never driving (INBUF).\n", on,
+                     off);
+    }
+
     static std::string storage_elements(int n)
     {
         return std::to_string(n) + (n == 1 ? " storage element" : " storage elements");
@@ -285,6 +325,7 @@ struct Xc2064Impl : HimbaechelAPI
                 CellTypePort(id_XC2000_IOBUF, id_PAD),
         };
         h.remove_nextpnr_iobs(top_ports);
+        fold_constant_tristate();
         bind_constrained_pads();
         bind_clock_pads();
         h.replace_constants(CellTypePort(id_VCC_DRV, id_VCC), CellTypePort(id_GND_DRV, id_GND), {}, {}, id_VCC,
@@ -336,8 +377,7 @@ struct Xc2064Impl : HimbaechelAPI
   private:
     HimbaechelHelpers h;
     dict<IdString, BelId> pad_bels;
-    std::array<BelId, 2> clock_pads;            // P9 (GCLK), P43 (ACLK)
-    std::set<std::tuple<char, int, int>> iob_slots; // (Seite, Randkanalstück, z) mit IOB
+    std::array<BelId, 2> clock_pads; // P9 (GCLK), P43 (ACLK)
 
     IdString lut_in(int i) const { return ctx->idf("I[%d]", i); }
 
@@ -605,7 +645,7 @@ struct Xc2064Impl : HimbaechelAPI
     // Nach Shirriffs draw.js (Reihenfolge und Abstände der Bildschirmkoordinaten), getrennt nach Spalte A
     // (Rand links), B-H und I (Rand rechts) bzw. Zeile A (oben), B-H und I (unten). Senkrechte Leitungen
     // liegen im Kanal links der CLB (x 0..0.36), waagerechte im Kanal oberhalb (y 0..0.36); -1: gibt es dort
-    // nicht (oder erst ab Stufe 3).
+    // nicht.
     enum VLine
     {
         V_LOC1, V_LOC2, V_LOC3, V_LOC4, V_LOC5, V_LOC6, V_LONG1, V_LONG2, V_LONG3, V_LONG4, V_CLK, V_X, V_N
@@ -682,6 +722,10 @@ struct Xc2064Impl : HimbaechelAPI
             return {true, true, V_LOC1 + (id - GFX_WIRE_V1_U), 0, -1};
         if (in(GFX_WIRE_V1_R, GFX_WIRE_V5_R))
             return {true, true, V_LOC1 + (id - GFX_WIRE_V1_R), 1, 0};
+        if (in(GFX_WIRE_V1_D, GFX_WIRE_V5_D))
+            return {true, true, V_LOC1 + (id - GFX_WIRE_V1_D), 0, 1};
+        if (in(GFX_WIRE_V1_RU, GFX_WIRE_V5_RU))
+            return {true, true, V_LOC1 + (id - GFX_WIRE_V1_RU), 1, -1};
         if (in(GFX_WIRE_VL1, GFX_WIRE_VL4))
             return {true, true, V_LONG1 + (id - GFX_WIRE_VL1), 0, 0};
         if (in(GFX_WIRE_VL1_R, GFX_WIRE_VL4_R))
@@ -694,6 +738,10 @@ struct Xc2064Impl : HimbaechelAPI
             return {true, false, H_LOC1 + (id - GFX_WIRE_H1_L), -1, 0};
         if (in(GFX_WIRE_H1_D, GFX_WIRE_H5_D))
             return {true, false, H_LOC1 + (id - GFX_WIRE_H1_D), 0, 1};
+        if (in(GFX_WIRE_H1_R, GFX_WIRE_H5_R))
+            return {true, false, H_LOC1 + (id - GFX_WIRE_H1_R), 1, 0};
+        if (in(GFX_WIRE_H1_LD, GFX_WIRE_H5_LD))
+            return {true, false, H_LOC1 + (id - GFX_WIRE_H1_LD), -1, 1};
         if (in(GFX_WIRE_HL1, GFX_WIRE_HL3))
             return {true, false, H_LONG1 + (id - GFX_WIRE_HL1), 0, 0};
         if (in(GFX_WIRE_HL1_D, GFX_WIRE_HL3_D))
@@ -749,7 +797,7 @@ struct Xc2064Impl : HimbaechelAPI
     // ... und ihre Abzweige in der Nachbarkachel: zu A und B der CLB darunter, zu D und C der CLB darüber
     static constexpr float XT_A_Y = 0.31, XT_B_Y = 0.335, XB_D_Y = 0.975, XB_C_Y = 0.965;
     // Direktleitungen im Kanal: X von oben/unten bzw. Pad auf der Spur von col.x, Y von links auf local.6
-    static constexpr float DIR_X = 0.336, YL_X = 0.212, PL_X = 0.318;
+    static constexpr float DIR_X = 0.336, YL_X = 0.212;
     // Zeilen (y)
     static constexpr float A_ROW = 0.392, B_ROW = 0.476, C_ROW = 0.523; // Eingänge von links
     static constexpr float C_LINE = 0.792, K_LINE = 0.805, D_ROW = 0.866; // unter der Logik zum FF
@@ -944,18 +992,22 @@ struct Xc2064Impl : HimbaechelAPI
     }
 
     // --- IOB-Geometrie ---
-    // Ein IOB hängt wie im Original am Kanalstück parallel zum Rand: oben/unten am waagerechten Kanal
-    // über der ersten bzw. unter der letzten CLB-Zeile, links/rechts am senkrechten Kanal der ersten bzw.
-    // letzten Spalte. Ein Kanalstück neben einer CLB trägt bis zu zwei IOBs: das erste Pad seiner
-    // Kachel (z = 0) in der ersten Hälfte, das zweite Pad der folgenden Kachel (z = 1) in der zweiten.
+    // Ein IOB liegt außen neben dem Kanal parallel zum Rand: oben/unten neben dem waagerechten Kanal der
+    // ersten bzw. letzten Zeile, links/rechts neben dem senkrechten der ersten bzw. letzten Spalte. Neben
+    // jeder Rand-CLB liegen bis zu zwei IOBs: das erste Pad ihrer Pad-Kachel (z = 0) in der ersten Hälfte,
+    // das zweite Pad der folgenden Kachel (z = 1) in der zweiten.
     // Koordinaten: r entlang des Rands ab dem Anfang des IOB, d vom Chiprand nach innen. Aufbau wie im
     // Datenblatt, von außen nach innen: Pad; Ausgangstreiber (Dreieck zum Pad) und Eingangstreiber
     // (Dreieck nach innen); Multiplexer für den Ausgang (Bel-Pin I, im Datenblatt "O") und das Tristate
-    // T; dann laufen die Leitungen von Ausgang, T und Eingang (Bel-Pin O, im Datenblatt "I") quer über
-    // das Kanalstück. Direktverbindungen: X (rechts auch Y) der Rand-CLB läuft gerade in den
-    // Ausgangsmultiplexer (oben/unten ist das zweite IOB dafür gespiegelt), der Eingang vom Pad läuft
-    // links, oben und unten weiter zu B bzw. C/D der Rand-CLB (auf den Wegen, die dort sonst die
-    // Direktleitungen von X und Y der fehlenden Nachbar-CLB nehmen).
+    // T; dann laufen die Leitungen von Ausgang, T und Eingang (Bel-Pin O, im Datenblatt "I") quer über den
+    // Kanal parallel zum Rand. Wie bei Shirriff (iob.js: Pin-Leitungen io1-io6, x, clbl, clbr) knickt ein
+    // Pin dahinter in eine Stichleitung parallel zum Rand ab, die die Leitungen quer zum Rand kreuzt.
+    // Welche Leitungen ein Pin schalten kann, folgt aus den Pips des Chips (xc2064db.graph); die Zeichnung
+    // sucht sie dort und setzt an jede Kreuzung ein Kästchen wie im Kanal.
+    // Direktverbindungen: X (rechts auch Y) der Rand-CLB läuft in den Ausgangsmultiplexer (oben/unten ist
+    // das zweite IOB dafür gespiegelt, rechts knickt der Weg zum zweiten IOB vor dem Randkanal ab); der
+    // Eingang vom Pad läuft oben, unten und links auf seiner Stichleitung weiter zu A/B, D/C bzw. B der
+    // Rand-CLB (oben/unten mit Abzweig auf der Spur von col.x).
     static constexpr float IOB_U0 = 0.385, IOB_DU = 0.3135, IOB_W = 0.27; // Lage am Kanalstück, Breite
     static constexpr float IOB_D0 = 0.18, IOB_D1 = 0.58;                 // Rahmen
     static constexpr float PAD_R = 0.135, PAD_HW = 0.04, PAD_D0 = 0.03, PAD_D1 = 0.11, JCT_D = 0.22;
@@ -964,7 +1016,14 @@ struct Xc2064Impl : HimbaechelAPI
     static constexpr float OM_R0 = 0.012, OM_R1 = 0.13, TM_R0 = 0.15, TM_R1 = 0.20; // Multiplexer
     static constexpr float MX_D0 = 0.44, OM_D1 = 0.52, TM_D1 = 0.50, EN_D = 0.32;
     static constexpr float O_R = 0.07, T_R = 0.175, I_R = IB_R; // Leitungen über den Kanal
-    static constexpr float DX_R = 0.0265, DY_R = 0.115;         // X, Y direkt (rechter Rand)
+    static constexpr float PIN_R[3] = {O_R, I_R, T_R};          // Bel-Pins I, O, T (Reihenfolge der Grafik-IDs)
+    static constexpr float DX_R = 0.0265, DY_R = 0.115;         // X, Y direkt (rechter Rand, z = 0)
+    static constexpr float DX1_R = 0.025, DY1_R = 0.045;        // ... z = 1, vor dem Ausgang
+    static constexpr float JOG_X = 0.98, JOG_Y = 0.97;          // Knick dorthin, vor dem Randkanal
+    // Stichleitungen: links auf Shirriffs Spuren col.A.local.5, io1, io2, io3, sonst in Schritten hinter
+    // dem Kanal (oben/unten/rechts ist dort weniger Platz als bei Shirriff)
+    static constexpr float STUB_STEP = 0.011;
+    static constexpr float L_STUB[4] = {0.234, 0.270, 0.294, 0.318};
 
     struct Iob
     {
@@ -979,12 +1038,10 @@ struct Xc2064Impl : HimbaechelAPI
         return Iob{s, z ? IOB_U0 + IOB_DU - 1 : IOB_U0, (s == 'T' || s == 'L') ? 0.30f : 0.0f,
                    (s == 'T' || s == 'B') && z == 1};
     }
-    // Punkt im IOB (d ohne Versatz) in Kachel-Koordinaten; Lagen im Kanal vorher um b.off verringern
-    static std::pair<float, float> iob_pt(const Iob &b, float r, float d)
+    // Punkt (u entlang des Rands, d vom Chiprand) in Kachel-Koordinaten der Pad-Kachel
+    static std::pair<float, float> edge_pt(char side, float u, float d)
     {
-        float u = b.mirror ? b.u0 + IOB_W - r : b.u0 + r;
-        d += b.off;
-        switch (b.side) {
+        switch (side) {
         case 'T':
             return {u, d};
         case 'B':
@@ -995,8 +1052,74 @@ struct Xc2064Impl : HimbaechelAPI
             return {1 - d, u};
         }
     }
-    // r zu einer Lage u entlang des Rands (in der eigenen Kachel)
+    // u zu r im IOB und umgekehrt
+    static float pin_u(const Iob &b, float r) { return b.mirror ? b.u0 + IOB_W - r : b.u0 + r; }
     static float iob_r(const Iob &b, float u) { return b.mirror ? IOB_W - (u - b.u0) : u - b.u0; }
+    // Punkt im IOB (d ohne Versatz) in Kachel-Koordinaten
+    static std::pair<float, float> iob_pt(const Iob &b, float r, float d)
+    {
+        return edge_pt(b.side, pin_u(b, r), d + b.off);
+    }
+    // Tiefe der Stichleitung von Ausgang (input = false) bzw. Eingang eines IOB. Die Pins eines IOB
+    // kreuzen sich nicht: der Pin weiter weg von den Leitungen quer zum Rand liegt tiefer.
+    static float stub_d(char side, int z, bool input)
+    {
+        static constexpr int RANK[4][2][2] = {
+                {{2, 3}, {0, 1}}, // oben: z = 0 (Leitungen links davon), z = 1 (rechts davon)
+                {{2, 3}, {0, 1}}, // unten
+                {{0, 1}, {2, 3}}, // links: z = 0 (Leitungen darüber), z = 1 (darunter)
+                {{0, 1}, {3, 2}}, // rechts
+        };
+        int rank = RANK[side == 'T' ? 0 : side == 'B' ? 1 : side == 'L' ? 2 : 3][z][input];
+        switch (side) {
+        case 'T':
+            return 1 + hy(1, H_LONG3) + STUB_STEP * (rank + 1);
+        case 'B':
+            return 1 - hy(LAST, H_LONG1) + STUB_STEP * (rank + 1);
+        case 'L':
+            return 1 + L_STUB[rank];
+        default:
+            return 1 - vx(LAST, V_LONG1) + STUB_STEP * (rank + 1);
+        }
+    }
+    // r, an dem X bzw. Y einer Rand-CLB direkt in den Ausgangsmultiplexer läuft
+    static float direct_r(const Iob &b, int z, bool y)
+    {
+        if (b.side == 'R')
+            return z ? (y ? DY1_R : DX1_R) : (y ? DY_R : DX_R);
+        return iob_r(b, (b.side == 'T' ? X_UP_X : X_DN_X) - 1); // X der Rand-CLB links daneben
+    }
+
+    struct IobPip
+    {
+        float u, d;
+        bool cross; // Kreuzung mit der Stichleitung (Leitung quer zum Rand)
+    };
+    // Lage des Pips zwischen Pin p (0: I, 1: O, 2: T) des IOB z und der Leitung other (Grafik-ID in der
+    // Pad-Kachel). false: kein Kästchen (Konstante, X/Y direkt).
+    static bool iob_pip(Loc loc, int z, int p, int32_t other, IobPip &res)
+    {
+        Iob b = iob(loc, z);
+        float u = pin_u(b, PIN_R[p]);
+        if (other == GFX_WIRE_GCLK || other == GFX_WIRE_GCLK_SRC) { // P9: CLK.AA.O über der Zeile A
+            res = {u, 1 + hy(1, H_CLK), false};
+            return true;
+        }
+        if (other == GFX_WIRE_ACLK || other == GFX_WIRE_ACLK_SRC) { // P43: row.I.clk
+            res = {u, 1 - hy(LAST, H_CLK), false};
+            return true;
+        }
+        Chan c = chan(other);
+        if (!c.ok)
+            return false;
+        float pos = c.vert ? chan_x(loc, c, -1) : chan_y(loc, c);
+        if (c.vert == (b.side == 'L' || b.side == 'R')) // parallel zum Rand: kreuzt den Pin selbst
+            res = {u, (b.side == 'T' || b.side == 'L') ? pos : 1 - pos, false};
+        else
+            res = {pos, stub_d(b.side, z, p == 1), true};
+        return true;
+    }
+
     void iob_line(std::vector<GraphicElement> &g, GraphicElement::style_t style, Loc loc, const Iob &b,
                   std::initializer_list<std::pair<float, float>> rd) const
     {
@@ -1029,41 +1152,141 @@ struct Xc2064Impl : HimbaechelAPI
         auto q = iob_pt(b, r, d);
         dot(g, style, loc, q.first, q.second);
     }
-    // Lage der Einzelsegmente local.1-4 (t = 0..3) und der zwei Long Lines (i) des Randkanals, gemessen vom
-    // Chiprand nach innen, und Ende der Leitungen dahinter
-    static float iob_track_d(char s, int t)
+
+    // --- Drähte und Knoten aus der Chip-Datenbank (für die Zeichnung der IOBs) ---
+    int32_t wire_gfx(WireId w) const { return chip_tile_info(ctx->chip_info, w.tile).wires[w.index].tile_wire; }
+    // Knoten des Drahts mit der Grafik-ID gfx in der Kachel loc, WireId() wenn es ihn dort nicht gibt
+    WireId tile_wire(Loc loc, int32_t gfx) const
     {
-        switch (s) {
-        case 'T':
-            return 1 + hy(1, H_LOC1 + t);
-        case 'B':
-            return 1 - hy(LAST, H_LOC1 + t);
-        case 'L':
-            return 1 + vx(1, V_LOC1 + t);
-        default:
-            return 1 - vx(LAST, V_LOC1 + t);
+        int tile = tile_by_xy(ctx->chip_info, loc.x, loc.y);
+        const auto &wires = chip_tile_info(ctx->chip_info, tile).wires;
+        for (int i = 0; i < wires.ssize(); i++)
+            if (wires[i].tile_wire == gfx)
+                return ctx->normalise_wire(tile, i);
+        return WireId();
+    }
+    // alle Drähte eines Knotens: fn(Kachel, Grafik-ID)
+    template <typename Fn> void node_wires(WireId node, Fn fn) const
+    {
+        for (WireId tw : ctx->get_tile_wire_range(node)) {
+            Loc l;
+            tile_xy(ctx->chip_info, tw.tile, l.x, l.y);
+            fn(l, wire_gfx(tw));
         }
     }
-    static float iob_long_d(char s, int i)
+    // Gehört zum Knoten des Drahts gfx in loc auch der Draht target in der Kachel (tx, ty)?
+    bool reaches(Loc loc, int32_t gfx, int tx, int ty, int32_t target) const
     {
-        switch (s) {
-        case 'T':
-            return 1 + hy(1, i ? H_LONG3 : H_LONG2);
-        case 'B':
-            return 1 - hy(LAST, i ? H_LONG2 : H_LONG1);
-        case 'L':
-            return 1 + vx(1, i ? V_LONG3 : V_LONG2);
-        default:
-            return 1 - vx(LAST, i ? V_LONG2 : V_LONG1);
+        WireId w = tile_wire(loc, gfx);
+        bool found = false;
+        if (w != WireId())
+            node_wires(w, [&](Loc l, int32_t id) { found |= l.x == tx && l.y == ty && id == target; });
+        return found;
+    }
+    // Lage der Stichleitung des Pads, dessen Eingang über PT, PB bzw. PL direkt in die Kachel clb führt, in
+    // deren Kachel-Koordinaten (oben/unten y, links x)
+    float pad_stub(WireId pad, Loc clb) const
+    {
+        float res = 0;
+        node_wires(pad, [&](Loc l, int32_t id) {
+            if (id != GFX_WIRE_IO0_O && id != GFX_WIRE_IO1_O)
+                return;
+            char side = io_side(l);
+            auto pt = edge_pt(side, 0, stub_d(side, id == GFX_WIRE_IO1_O, true));
+            res = side == 'L' ? pt.first + l.x - clb.x : pt.second + l.y - clb.y;
+        });
+        return res;
+    }
+
+    // Leitung eines IOB-Pins: vom Multiplexer bzw. Eingangstreiber über den Kanal parallel zum Rand bis zu
+    // seiner letzten Kreuzung oder zur Stichleitung, die die Leitungen quer zum Rand und beim Eingang die
+    // Direkteingänge der Rand-CLB erreicht
+    void draw_iob_pin(std::vector<GraphicElement> &g, GraphicElement::style_t style, Loc loc, int z, int p) const
+    {
+        Iob b = iob(loc, z);
+        const float u = pin_u(b, PIN_R[p]), ds = stub_d(b.side, z, p == 1);
+        float d_end = 0, lo = u, hi = u, branch = -1, branch_d = 0;
+        bool stub = false;
+        WireId w = tile_wire(loc, GFX_WIRE_IO0_I + 3 * z + p);
+        if (w == WireId())
+            return;
+        auto visit = [&](PipId pip, WireId other) {
+            Loc pl = ctx->getPipLocation(pip);
+            IobPip q;
+            if (pl.x != loc.x || pl.y != loc.y || !iob_pip(loc, z, p, local_gfx_id(other, loc, -1), q))
+                return;
+            if (q.cross)
+                stub = true, lo = std::min(lo, q.u), hi = std::max(hi, q.u);
+            else
+                d_end = std::max(d_end, q.d);
+        };
+        if (p == 1) {
+            for (PipId pip : ctx->getPipsDownhill(w))
+                visit(pip, ctx->getPipDstWire(pip));
+            // direkt in die Rand-CLB: oben zu A (Kästchen auf der Stichleitung) und B, unten zu D und C
+            // (Abzweig auf der Spur von col.x), links zu B
+            node_wires(w, [&](Loc l, int32_t id) {
+                if (id == GFX_WIRE_PT || id == GFX_WIRE_PB) {
+                    branch = l.x - loc.x + DIR_X, stub = true;
+                    branch_d = id == GFX_WIRE_PT ? 1 + B_ROW : 2 - C_ROW;
+                    lo = std::min(lo, branch), hi = std::max(hi, branch);
+                } else if (id == GFX_WIRE_PL) {
+                    float t = l.y - loc.y + B_ROW;
+                    stub = true, lo = std::min(lo, t), hi = std::max(hi, t);
+                }
+            });
+        } else {
+            for (PipId pip : ctx->getPipsUphill(w))
+                visit(pip, ctx->getPipSrcWire(pip));
+        }
+        float de = (stub ? ds : d_end + 0.012f) - b.off;
+        if (p == 0) { // Ausgang zum Pad: Multiplexer -> Ausgangstreiber
+            iob_mux(g, style, loc, b, OM_R0, OM_R1, MX_D0, OM_D1);
+            iob_line(g, style, loc, b, {{O_R, de}, {O_R, OM_D1}});
+            iob_line(g, style, loc, b, {{O_R, MX_D0}, {O_R, OB_BASE}});
+        } else if (p == 2) { // Tristate: Multiplexer -> Freigabe des Ausgangstreibers
+            iob_mux(g, style, loc, b, TM_R0, TM_R1, MX_D0, TM_D1);
+            iob_line(g, style, loc, b, {{T_R, de}, {T_R, TM_D1}});
+            iob_line(g, style, loc, b, {{T_R, MX_D0}, {T_R, EN_D}, {OB_R + 0.015, EN_D}});
+        } else { // Eingang vom Pad: Eingangstreiber -> über den Kanal
+            iob_line(g, style, loc, b, {{I_R, IB_TIP}, {I_R, de}});
+        }
+        if (!stub)
+            return;
+        poly(g, style, loc, {edge_pt(b.side, lo, ds), edge_pt(b.side, hi, ds)});
+        auto tee = [&](float t) { // Abzweig mitten auf der Stichleitung
+            if (t > lo && t < hi) {
+                auto q = edge_pt(b.side, t, ds);
+                dot(g, style, loc, q.first, q.second);
+            }
+        };
+        tee(u);
+        if (branch >= 0) {
+            tee(branch);
+            poly(g, style, loc, {edge_pt(b.side, branch, ds), edge_pt(b.side, branch, branch_d)});
         }
     }
-    static float iob_end_d(char s)
+
+    // X bzw. Y nach rechts durch den Kanal; in Spalte H durch den Randkanal bis in die IOBs, die es direkt
+    // nehmen: z = 0 daneben gerade, z = 1 der Kachel darunter über einen Knick vor dem Randkanal
+    void out_right(std::vector<GraphicElement> &g, GraphicElement::style_t style, Loc loc, float ox, float oy,
+                   bool y) const
     {
-        return std::max({iob_track_d(s, 0), iob_track_d(s, 3), iob_long_d(s, 0), iob_long_d(s, 1)}) + 0.015f;
+        if (loc.x < LAST - 1) {
+            poly(g, style, loc, {{ox, oy}, {1 + vx(loc.x + 1, y ? V_LONG2 : V_LONG1) + 0.01f, oy}});
+            return;
+        }
+        int32_t id = y ? GFX_WIRE_Y : GFX_WIRE_X;
+        bool z0 = reaches(loc, id, LAST, loc.y, y ? GFX_WIRE_IO0_Y : GFX_WIRE_IO0_X);
+        bool z1 = loc.y + 1 < LAST && reaches(loc, id, LAST, loc.y + 1, y ? GFX_WIRE_IO1_Y : GFX_WIRE_IO1_X);
+        poly(g, style, loc, {{ox, oy}, {z0 ? 2 - OM_D1 : 1 + vx(LAST, V_LONG3) + 0.01f, oy}});
+        if (z1) {
+            Iob b = iob(Loc(LAST, loc.y + 1, 1), 1);
+            float jx = y ? JOG_Y : JOG_X, ty = 1 + pin_u(b, direct_r(b, 1, y));
+            poly(g, style, loc, {{jx, oy}, {jx, ty}, {2 - OM_D1, ty}});
+            dot(g, style, loc, jx, oy);
+        }
     }
-    bool has_iob(char side, int seg, int z) const { return iob_slots.count({side, seg, z}) > 0; }
-    // CLB der letzten Spalte mit IOB rechts daneben, das X und Y direkt nimmt
-    bool right_iob(Loc loc) const { return loc.x == ctx->getGridDimX() - 2 && has_iob('R', loc.y, 0); }
 
     void drawGroup(std::vector<GraphicElement> &g, GroupId group, Loc loc) override
     {
@@ -1128,27 +1351,21 @@ struct Xc2064Impl : HimbaechelAPI
     void drawWire(std::vector<GraphicElement> &g, GraphicElement::style_t style, Loc loc, IdString wire_type,
                   int32_t tilewire, IdString tile_type) override
     {
-        float x = loc.x, y = loc.y;
 
         // CLB: Multiplexer mit Ausgang zum Bel bzw. zum Pin
         bool is_mux = for_muxes(tilewire, [&](const Mux &m) {
             float ox = mux_x(m) + MUX_W, oy = mux_out_y(m);
             draw_mux(g, style, loc, mux_x(m), m.y_top, ox, mux_bot(m));
             switch (m.out) {
-            case GFX_WIRE_X: // durch den Kanal rechts bis long.1 (Spalte H: nur ins IOB), Direktleitungen
-                poly(g, style, loc,
-                     {{ox, oy},
-                      {right_iob(loc)                         ? 2 - OM_D1
-                       : loc.x < ctx->getGridDimX() - 2 ? 1 + vx(loc.x + 1, V_LONG1) + 0.01f
-                                                              : 1.0f,
-                       oy}});
+            case GFX_WIRE_X: // durch den Kanal rechts bis long.1 (Spalte H: in die IOBs rechts), Direktleitungen
+                out_right(g, style, loc, ox, oy, false);
                 if (loc.y > 1) { // zu D und C der CLB darüber
                     poly(g, style, loc,
                          {{X_UP_X, oy}, {X_UP_X, XB_C_Y - 1}, {DIR_X, XB_C_Y - 1}, {DIR_X, C_ROW - 1}});
                     poly(g, style, loc, {{X_UP_X, XB_D_Y - 1}, {D_PIN_X, XB_D_Y - 1}});
                     dot(g, style, loc, X_UP_X, oy);
                     dot(g, style, loc, X_UP_X, XB_D_Y - 1);
-                } else if (has_iob('T', loc.x, 1)) { // in den Ausgangsmultiplexer des IOB darüber
+                } else if (reaches(loc, GFX_WIRE_X, loc.x + 1, 0, GFX_WIRE_IO1_X)) { // ins IOB darüber
                     poly(g, style, loc, {{X_UP_X, oy}, {X_UP_X, -1 + 0.30f + OM_D1}});
                     dot(g, style, loc, X_UP_X, oy);
                 }
@@ -1158,19 +1375,16 @@ struct Xc2064Impl : HimbaechelAPI
                     poly(g, style, loc, {{X_DN_X, 1 + XT_A_Y}, {A_PIN_X, 1 + XT_A_Y}});
                     dot(g, style, loc, X_DN_X, oy);
                     dot(g, style, loc, X_DN_X, 1 + XT_A_Y);
-                } else if (has_iob('B', loc.x, 1)) { // in den Ausgangsmultiplexer des IOB darunter
+                } else if (reaches(loc, GFX_WIRE_X, loc.x + 1, LAST, GFX_WIRE_IO1_X)) { // ins IOB darunter
                     poly(g, style, loc, {{X_DN_X, oy}, {X_DN_X, 2 - OM_D1}});
                     dot(g, style, loc, X_DN_X, oy);
                 }
                 break;
             case GFX_WIRE_Y: // durch den Kanal rechts bis long.2, Abzweig auf local.6 zu B der Nachbar-CLB
-                if (loc.x < ctx->getGridDimX() - 2) {
-                    poly(g, style, loc, {{ox, oy}, {1 + vx(loc.x + 1, V_LONG2) + 0.01f, oy}});
+                out_right(g, style, loc, ox, oy, true);
+                if (loc.x < LAST - 1) {
                     poly(g, style, loc, {{1 + YL_X, oy}, {1 + YL_X, B_ROW}});
                     dot(g, style, loc, 1 + YL_X, oy);
-                } else {
-                    poly(g, style, loc,
-                         {{ox, oy}, {right_iob(loc) ? 2 - OM_D1 : 1 + vx(LAST, V_LONG3) + 0.01f, oy}});
                 }
                 break;
             case GFX_WIRE_FF_S: // Set von oben
@@ -1251,65 +1465,20 @@ struct Xc2064Impl : HimbaechelAPI
             return;
         }
 
-        // IOB: Multiplexer und Leitungen der Pins über das Randkanalstück
+        // IOB: Multiplexer und Leitungen der Pins (Taktpuffer: P9 bzw. P43 kreuzt seine Taktleitung, das
+        // Kästchen dort zeichnet der Pip)
         if (tilewire >= GFX_WIRE_IO0_I && tilewire <= GFX_WIRE_IO1_T) {
             int z = (tilewire - GFX_WIRE_IO0_I) / 3, p = (tilewire - GFX_WIRE_IO0_I) % 3; // I, O, T
-            Iob b = iob(loc, z);
-            float de = iob_end_d(b.side) - b.off;
-            if (p == 0) { // Ausgang zum Pad: Multiplexer -> Ausgangstreiber
-                iob_mux(g, style, loc, b, OM_R0, OM_R1, MX_D0, OM_D1);
-                iob_line(g, style, loc, b, {{O_R, de}, {O_R, OM_D1}});
-                iob_line(g, style, loc, b, {{O_R, MX_D0}, {O_R, OB_BASE}});
-            } else if (p == 2) { // Tristate: Multiplexer -> Freigabe des Ausgangstreibers
-                iob_mux(g, style, loc, b, TM_R0, TM_R1, MX_D0, TM_D1);
-                iob_line(g, style, loc, b, {{T_R, de}, {T_R, TM_D1}});
-                iob_line(g, style, loc, b, {{T_R, MX_D0}, {T_R, EN_D}, {OB_R + 0.015, EN_D}});
-            } else { // Eingang vom Pad: Eingangstreiber -> über den Kanal
-                iob_line(g, style, loc, b, {{I_R, IB_TIP}, {I_R, de}});
-                // ... und direkt zur Rand-CLB (d hier ohne Versatz, s. iob_pt)
-                if (b.side == 'T' && z == 0) { // -> A und B der CLB darunter
-                    float dd = 1 + XT_B_Y - b.off, da = 1 + XT_A_Y - b.off, rx = iob_r(b, DIR_X);
-                    iob_line(g, style, loc, b, {{I_R, de}, {I_R, dd}, {rx, dd}, {rx, 1 + B_ROW - b.off}});
-                    iob_line(g, style, loc, b, {{I_R, da}, {iob_r(b, A_PIN_X), da}});
-                    iob_dot(g, style, loc, b, I_R, da);
-                } else if (b.side == 'B' && z == 0) { // -> D und C der CLB darüber
-                    float dd = 2 - XB_D_Y, dc = 2 - XB_C_Y, rc = iob_r(b, DIR_X);
-                    iob_line(g, style, loc, b, {{I_R, de}, {I_R, dc}, {rc, dc}, {rc, 2 - C_ROW}});
-                    iob_line(g, style, loc, b, {{I_R, dd}, {iob_r(b, D_PIN_X), dd}});
-                    iob_dot(g, style, loc, b, I_R, dd);
-                } else if (b.side == 'L' && z == 1) { // -> B der CLB rechts (Zeile darüber)
-                    float dd = 1 + YL_X - b.off;
-                    iob_line(g, style, loc, b, {{I_R, de}, {I_R, dd}, {iob_r(b, B_ROW - 1), dd}});
-                }
-                for (int c = 0; c < 2; c++) { // Taktpuffer: P9 (oben) speist GCLK, P43 (unten) ACLK
-                    Loc cl = ctx->getBelLocation(clock_pads[c]);
-                    if (cl.x != loc.x || cl.y != loc.y || cl.z != z)
-                        continue;
-                    // GCLK: in CLK.AA.O oben über der Spalte A; ACLK: waagerecht nach links in row.I.clk
-                    float tx = c ? 0.0f : vx(1, V_CLK), td = c ? 1 - hy(LAST, H_CLK) : 1 + hy(1, H_CLK);
-                    float bd = (c ? td : 0.97f) - b.off, tr = iob_r(b, tx);
-                    iob_line(g, style, loc, b, {{I_R, bd}, {tr, bd}, {tr, td - b.off}});
-                    iob_dot(g, style, loc, b, I_R, bd);
-                }
-            }
+            draw_iob_pin(g, style, loc, z, p);
             return;
         }
 
-        // Kanäle: das eigene Stück zeichnet die ganze Leitung, Nachbarstücke (_U, _R, _L, _D) nichts
+        // Kanäle: das eigene Stück zeichnet die ganze Leitung, Nachbarstücke (_U, _R, _L, _D, ...) nichts.
+        // In den Pad-Kacheln links und oben liegen nur Zugänge zu Leitungen der Nachbarkacheln.
         Chan c = chan(tilewire);
-        if (c.ok) {
-            if (c.dx == 0 && c.dy == 0)
-                draw_channel(g, style, loc, c);
-            return;
-        }
-        // Taktpuffer: kleine Markierung am Übergang vom Pad zur Taktleitung
-        if (tilewire == GFX_WIRE_GCLK_SRC || tilewire == GFX_WIRE_ACLK_SRC) {
-            float px = tilewire == GFX_WIRE_GCLK_SRC ? vx(1, V_CLK) : 0.0f;
-            float py = tilewire == GFX_WIRE_GCLK_SRC ? 1 + hy(1, H_CLK) : hy(LAST, H_CLK);
-            line(g, style, x + px - 0.008, y + py, x + px + 0.008, y + py);
-            line(g, style, x + px, y + py - 0.008, x + px, y + py + 0.008);
-        }
-        // Zugänge der IOBs zum Randkanal und Direktleitungen: Teile von Knoten, die andere Drähte zeichnen
+        if (c.ok && c.dx == 0 && c.dy == 0 && loc.x > 0 && loc.y > 0)
+            draw_channel(g, style, loc, c);
+        // Sonst Teile von Knoten, die andere Drähte zeichnen (X/Y direkt im IOB, Taktpuffer)
     }
 
     // Grafik-ID des Drahts, den ein Knoten in der Kachel loc hat. nextpnr übergibt drawPip die
@@ -1371,8 +1540,10 @@ struct Xc2064Impl : HimbaechelAPI
         case GFX_WIRE_A: // Pin kreuzt den Kanal oberhalb
             if (cs.ok)
                 pip_box(g, style, loc, A_PIN_X, chan_y(loc, cs));
-            else if (src_id == GFX_WIRE_XT || src_id == GFX_WIRE_PT) // X der CLB darüber bzw. Pad oben
+            else if (src_id == GFX_WIRE_XT) // X der CLB darüber
                 pip_box(g, style, loc, A_PIN_X, XT_A_Y);
+            else if (src_id == GFX_WIRE_PT) // Pad oben: auf seiner Stichleitung
+                pip_box(g, style, loc, A_PIN_X, pad_stub(src, loc));
             return;
         case GFX_WIRE_B:
         case GFX_WIRE_C: { // Zeilen kreuzen den Kanal links
@@ -1382,8 +1553,8 @@ struct Xc2064Impl : HimbaechelAPI
             else if (src_id == GFX_WIRE_XT || src_id == GFX_WIRE_XB || src_id == GFX_WIRE_PT ||
                      src_id == GFX_WIRE_PB) // Direktverbindung von X bzw. Pad darüber/darunter (col.x)
                 pip_box(g, style, loc, DIR_X, py);
-            else if (src_id == GFX_WIRE_PL) // Direktverbindung vom Pad links (col.A.io3)
-                pip_box(g, style, loc, PL_X, py);
+            else if (src_id == GFX_WIRE_PL) // Direktverbindung vom Pad links: auf seiner Stichleitung
+                pip_box(g, style, loc, pad_stub(src, loc), py);
             else if (src_id == GFX_WIRE_YL) // Direktverbindung von Y der CLB links (local.6)
                 pip_box(g, style, loc, YL_X, py);
             return;
@@ -1391,8 +1562,10 @@ struct Xc2064Impl : HimbaechelAPI
         case GFX_WIRE_D: // Pin kreuzt den Kanal unterhalb
             if (cs.ok)
                 pip_box(g, style, loc, D_PIN_X, chan_y(loc, cs));
-            else if (src_id == GFX_WIRE_XB || src_id == GFX_WIRE_PB) // Direkt von X bzw. Pad darunter
+            else if (src_id == GFX_WIRE_XB) // Direkt von X darunter
                 pip_box(g, style, loc, D_PIN_X, XB_D_Y);
+            else if (src_id == GFX_WIRE_PB) // Pad darunter: auf seiner Stichleitung
+                pip_box(g, style, loc, D_PIN_X, pad_stub(src, loc));
             return;
         case GFX_WIRE_K: // long.2 (Spalte A: long.4) und GCLK
             if (cs.ok)
@@ -1405,31 +1578,25 @@ struct Xc2064Impl : HimbaechelAPI
             return;
         }
 
-        // IOB: Kästchen, wo die Leitung eines Pins Spur, Long Line oder X/Y trifft; Taktpuffer
+        // IOB: Kästchen, wo ein Pin bzw. seine Stichleitung eine Leitung kreuzt (beim Taktpuffer die
+        // Taktleitung); X/Y direkt am Eingang des Ausgangsmultiplexers; Konstanten ohne
         int32_t pin = (src_id >= GFX_WIRE_IO0_I && src_id <= GFX_WIRE_IO1_T) ? src_id : dst_id;
         if (pin < GFX_WIRE_IO0_I || pin > GFX_WIRE_IO1_T)
             return;
         int z = (pin - GFX_WIRE_IO0_I) / 3, p = (pin - GFX_WIRE_IO0_I) % 3;
         int32_t other = pin == src_id ? dst_id : src_id;
         Iob b = iob(loc, z);
-        float r = p == 0 ? O_R : p == 1 ? I_R : T_R, d;
-        if (other >= GFX_WIRE_IO0_T00 && other <= GFX_WIRE_IO1_T11) {
-            d = iob_track_d(b.side, (other - GFX_WIRE_IO0_T00) % 4) - b.off;
-        } else if (other >= GFX_WIRE_IO0_L0 && other <= GFX_WIRE_IO1_L1) {
-            d = iob_long_d(b.side, (other - GFX_WIRE_IO0_L0) % 2) - b.off;
-        } else if (other == GFX_WIRE_IO0_X || other == GFX_WIRE_IO0_Y) {
-            r = other == GFX_WIRE_IO0_X ? DX_R : DY_R, d = OM_D1 + 0.012;
-        } else if (other == GFX_WIRE_IO1_X) { // X der Rand-CLB oben/unten (Kachel daneben)
-            r = iob_r(b, (b.side == 'T' ? X_UP_X : X_DN_X) - 1), d = OM_D1 + 0.012;
-        } else if (other == GFX_WIRE_GCLK_SRC) { // in CLK.AA.O über Spalte A
-            r = iob_r(b, vx(1, V_CLK)), d = 1 + hy(1, H_CLK) - b.off;
-        } else if (other == GFX_WIRE_ACLK_SRC) { // in row.I.clk am linken Rand der Kachel
-            r = iob_r(b, 0.0f), d = 1 - hy(LAST, H_CLK) - b.off;
-        } else {
-            return; // Konstanten GND/VCC
+        if (other >= GFX_WIRE_IO0_X && other <= GFX_WIRE_IO1_Y) {
+            bool y = other == GFX_WIRE_IO0_Y || other == GFX_WIRE_IO1_Y;
+            auto q = iob_pt(b, direct_r(b, z, y), OM_D1 + 0.012f);
+            pip_box(g, style, loc, q.first, q.second);
+            return;
         }
-        auto q = iob_pt(b, r, d);
-        pip_box(g, style, loc, q.first, q.second);
+        IobPip q;
+        if (iob_pip(loc, z, p, other, q)) {
+            auto pt = edge_pt(b.side, q.u, q.d);
+            pip_box(g, style, loc, pt.first, pt.second);
+        }
     }
 };
 

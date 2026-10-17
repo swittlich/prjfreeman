@@ -4,6 +4,8 @@ Eine Zeile je Eintrag, Namen wie bei Shirriff, '#' leitet einen Kommentar ein:
 
     device XC2064
     mux AB.A row.A.local.1          CLB-Eingang A..D, K und die gewählte Quellleitung (oder none)
+    mux P59.O col.I.local.4         Ausgangs-Mux eines IOB (Leitung, X/Y einer CLB wie AH.X, GCLK)
+    mux P59.T col.I.long.2          Tristate-Mux eines IOB: Quelle (Tristate), on (immer aktiv) oder off
     pip col.B.local.1:row.C.local.3 einzelnes PIP-Bit, Kreuzung einer col- mit einer row-Leitung
     switch BC.8.1 1-3               Verbindung zweier Pins einer Switch-Matrix (Magic-Bit)
     bidi 125G6                      Bidi-Bit (Bedeutung offen, daher die G-Koordinate)
@@ -11,13 +13,13 @@ Eine Zeile je Eintrag, Namen wie bei Shirriff, '#' leitet einen Kommentar ein:
                                     jedes andere programmierte Bit mit seinem Namen aus XC2064-def.txt
                                     (LUT, FF, X/Y, IOB-Muxe und -Optionen, Taktpuffer, Other)
 
-Stufe 1 (dieser Stand) dekodiert die CLB-Eingänge, Pips, Switch-Matrizen und Bidi-Bits; alles Weitere steht
-bitweise da und wird in den folgenden Stufen zu Bel-Optionen (z. B. LUT-Inhalt, IOB-Modus). Die Datei ist
+Dekodiert sind die CLB-Eingänge, die O- und T-Muxe der IOBs (mit Modus), Pips, Switch-Matrizen und
+Bidi-Bits; alles Weitere steht bitweise da und wird in den folgenden Stufen zu Bel-Optionen (z. B. LUT-Inhalt). Die Datei ist
 verlustfrei: Aus ihr ergibt sich jedes programmierte Bit, die Mux-Bits über die Codes.
 """
 import collections
 
-from . import bitmap, clbmux, lines as lines_mod, switches
+from . import bitmap, clbmux, iobmux, lines as lines_mod, switches
 
 Item = collections.namedtuple("Item", "kind name value bits comment")
 
@@ -29,8 +31,19 @@ class Database:
         self.entries = bitmap.load()
         self.lines = lines_mod.Lines()
         self.muxes = clbmux.muxes(self.lines, self.entries)
+        self.iobs = iobmux.iobs(self.lines, self.entries)
         self.switch_pos = {g: name for name, g in switches.positions(self.lines).items()}
         self.mux_bits = {b for m in self.muxes.values() for b in m.bits.values()}
+        self.mux_bits |= {b for i in self.iobs.values() for b in list(i.obits.values()) + list(i.tbits.values())}
+
+
+def iob_source_name(ent):
+    """Name einer Quelle des O- bzw. T-Mux im Textformat: Leitung, X/Y einer CLB oder GCLK"""
+    if ent.kind == "route":
+        return ent.line
+    if ent.kind in ("x", "y"):
+        return "%s.%s" % (ent.special, ent.kind.upper())
+    return ent.kind.upper()
 
 
 def decode(db, raw):
@@ -44,6 +57,22 @@ def decode(db, raw):
             problems.append("%s: unbekannter Mux-Code %d" % (name, m.code(raw)))
             continue
         items.append(Item("mux", name, src.line if src else "none", sorted(m.bits.values()), "Code %d" % code))
+    for pin, iob in sorted(db.iobs.items(), key=lambda kv: int(kv[0][1:])):
+        c = iobmux.code(iob.obits, raw)
+        if c in iob.omux:
+            items.append(Item("mux", pin + ".O", iob_source_name(iob.o[iob.omux[c]]), sorted(iob.obits.values()),
+                              "Code %d" % c))
+        else:
+            problems.append("%s.O: unbekannter Mux-Code %d" % (pin, c))
+        c = iobmux.code(iob.tbits, raw)
+        if c in iob.tmux:
+            value = iob_source_name(iob.t[iob.tmux[c]])
+        elif c in (iob.t_off, iob.t_on):
+            value = "off" if c == iob.t_off else "on"
+        else:
+            problems.append("%s.T: unbekannter Code %d" % (pin, c))
+            continue
+        items.append(Item("mux", pin + ".T", value, sorted(iob.tbits.values()), "Code %d" % c))
     for e in db.entries:
         if raw[e.index] != 0 or e.index in db.mux_bits:
             continue

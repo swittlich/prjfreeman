@@ -43,8 +43,10 @@ def classify(elements):
             continue
         a, b = e.split(":", 1)
         b = re.sub(r"-[sl]$", "", b)
-        if b.startswith("PAD") or a.startswith("PAD"):
-            out.append(("iob", e))
+        if a.startswith("PAD"):
+            a, b = b, a
+        if b.startswith("PAD"):
+            out.append(("iob", "%s %s" % (b, a)))
         elif re.fullmatch(r"[A-H][A-H]\.[ABCDK]", b):
             out.append(("mux", "%s %s" % (b, a)))
         elif re.fullmatch(r"[A-H][A-H]\.[XY]", b):
@@ -55,8 +57,10 @@ def classify(elements):
     return out
 
 
-def check_elements(nets, items):
-    """Elemente von XACT, die in der Dekodierung (config.decode) fehlen: {Art: [Name, ...]}, dazu Zähler"""
+def check_elements(nets, items, db):
+    """Elemente von XACT, die in der Dekodierung (config.decode) fehlen: {Art: [Name, ...]}, dazu Zähler.
+    IOB-Elemente "LINE:PADn.O/T" sind Mux-Quellen, "LINE:PADn.I" Eingangs-Pips (Lage aus iob.js);
+    Takte der gelatchten IOBs (.K und die Kreuzungen ihrer Muxe, ohne PIP-Bit) zählen unter "iob-k"."""
     have = set()
     for it in items:
         if it.kind == "switch":
@@ -65,25 +69,46 @@ def check_elements(nets, items):
             have.add(("pip", it.name))
         elif it.kind == "mux":
             have.add(("mux", "%s %s" % (it.name, it.value)))
+    pin_of = {iob.pad: pin for pin, iob in db.iobs.items()}
+    pip_names = {db.lines.pip_name(e.key[0]) for e in db.entries if e.kind == "pip"}
+    # Puffer aus bzw. immer an: die T-Bits tragen den Modus, eine geroutete Leitung am T-Eingang wählt der
+    # Mux dann nicht (in TEST1 z. B. P8 "BUF:" mit Netz an P8.T)
+    t_mode = {it.name: it.value for it in items if it.kind == "mux" and it.name.endswith(".T")}
+    for p, v in t_mode.items():
+        if v in ("off", "on"):
+            have.add(("mux-mode", p))
     missing, count = collections.defaultdict(list), collections.Counter()
     for net in nets.values():
         for kind, name in classify(net["elements"]):
-            count[kind] += 1
             if kind == "iob":
-                continue
+                pad, line = name.split()
+                padname, which = pad.split(".")
+                pin = pin_of[padname]
+                if which == "K":
+                    kind = "iob-k"
+                elif which == "T" and ("mux-mode", pin + ".T") in have:
+                    kind, name = "mux-mode", pin + ".T"
+                elif which in "OT":
+                    kind, name = "mux", "%s.%s %s" % (pin, which, line)
+                else:
+                    ent = [e for e in db.iobs[pin].i if e.kind == "route" and e.line == line]
+                    kind, name = "pip", db.lines.pip_name(ent[0].g) if ent else "%s.I %s" % (pin, line)
             if kind == "out":  # X -> Zeile io6, Y -> Zeile y der CLB
                 clb, line = name.split()
                 row = "row.%s.%s" % (clb[0], "io6" if clb.endswith(".X") else "y")
                 kind, name = "pip", "%s:%s" % (line, row)
-            if (kind, name) not in have:
+            if kind == "pip" and name not in pip_names:
+                kind = "iob-k"  # Kreuzung ohne PIP-Bit: Quelle eines K-Mux (Takt gelatchter IOBs)
+            count[kind] += 1
+            if kind != "iob-k" and (kind, name) not in have:
                 missing[kind].append(name)
     return missing, count
 
 
-def check_nets(nets, graph, raw):
-    """Verbindet der Graph mit den programmierten Bits die CLB-Pins jedes Netzes, und nur diese?
-    Ergebnis: Liste (Netz, CLB-Pins, Zustand) mit Zustand ok, getrennt (Pins in mehreren Teilen) oder
-    verbunden mit (Pins eines anderen Netzes im selben Teil)."""
+def check_nets(nets, graph, raw, skip=()):
+    """Verbindet der Graph mit den programmierten Bits die CLB- und IOB-Pins jedes Netzes, und nur diese?
+    skip: Pins, die nicht zählen (T-Eingänge mit Puffer aus/an). Ergebnis: Liste (Netz, Pins, Zustand) mit
+    Zustand ok, getrennt (Pins in mehreren Teilen) oder verbunden mit (Pins eines anderen Netzes im selben Teil)."""
     parent = {}
 
     def find(n):
@@ -97,14 +122,14 @@ def check_nets(nets, graph, raw):
         parent[find(a)] = find(b)
 
     for cn in graph.conns:
-        if cn.kind == "mux":
+        if cn.kind in ("mux", "iobo", "iobt"):
             if sum(raw[b] << n for n, b in enumerate(cn.bits)) == cn.code:
                 union(cn.a, cn.b)
         elif all(raw[b] == 0 for b in cn.bits):
             union(cn.a, cn.b)
     owner, result = {}, []
     for name, net in nets.items():
-        pins = [p for p in net["pins"] if re.fullmatch(r"[A-H][A-H]\.[ABCDKXY]", p)]
+        pins = [p for p in net["pins"] if re.fullmatch(r"[A-H][A-H]\.[ABCDKXY]|P\d+\.[IOT]", p) and p not in skip]
         for p in pins:
             owner.setdefault(find(p), name)
         result.append([name, pins, None])

@@ -1,7 +1,7 @@
-"""Routing-Graph des XC2064 aus den Daten (Stand Stufe 2: das CLB-Feld mit seinen Kanälen).
+"""Routing-Graph des XC2064 aus den Daten (Stand Stufe 3: CLB-Feld mit seinen Kanälen und die IOBs).
 
 Knoten sind elektrisch zusammenhängende Leitungsstücke, Verbindungen sind die programmierbaren Punkte der
-Bitkarte (PIP-Bits, Magic-Bits der Switch-Matrizen, Codes der CLB-Eingangs-Muxe) und feste Verdrahtung.
+Bitkarte (PIP-Bits, Magic-Bits der Switch-Matrizen, Codes der CLB- und IOB-Muxe) und feste Verdrahtung.
 
 Segmente (Datenblatt "General-Purpose Interconnect", Bild 7b; Lage aus den G-Koordinaten):
   - Die Einzelsegmente local.1-4 senkrecht und die waagerechten der Switch-Matrizen enden an den Matrizen.
@@ -19,18 +19,23 @@ Segmente (Datenblatt "General-Purpose Interconnect", Bild 7b; Lage aus den G-Koo
   - CLB-Ausgänge: X (Zeile io6) und Y (Zeile y) einer CLB "RC.X", "RC.Y", Eingänge "RC.A" ... "RC.K".
   - Direktverbindungen (Datenblatt "Direct Interconnect"): X geht fest auf A/B der CLB darunter (Quellen
     row.R.io4, col.C.x an b) und C/D der CLB darüber (col.C.x an c, row.R+1.io3), Y auf B der CLB rechts
-    (col.C.local.6 an b). Am Rand sind diese Quellen Pads (Stufe 3), hier als "pad:T|L|B" markiert.
+    (col.C.local.6 an b). Am Rand sind diese Quellen Pads: der Eingang "Pnn.I" des Pads (iob.js).
+  - IOBs (iob.js): Knoten "Pnn.O" (Ausgangs-Mux zum Pad), "Pnn.T" (Tristate-Mux) und "Pnn.I" (Eingang vom
+    Pad). Die Pin-Leitungen an den Kreuzungen (io1-io6, x, clbl/clbr/clbw, local.0 und local.5 am Rand)
+    gehören zum IOB und sind keine eigenen Knoten.
 
 Verbindungsarten (Conn.kind): pip (PIP-Bit, zwischen allgemeinen Leitungen in beide Richtungen),
 out (PIP-Bit von X/Y auf eine Leitung), switch (Magic-Bit), junction (Verbindungspunkt der fünften
-Leitung), mux (CLB-Eingang: Quelle -> Pin, bits = Mux-Bits, code). Nicht erfasst (Stufe 3/4): IOB-Leitungen,
-die fünften Leitungen und local.0 am Rand, die Taktpuffer.
+Leitung), mux (CLB-Eingang: Quelle -> Pin, bits = Mux-Bits, code), iobo/iobt (Ausgangs- bzw. T-Mux eines
+IOB: Quelle -> Pnn.O/T, mit code; Treiber aus/an sind Codes ohne Quelle), iobi (PIP-Bit: Pnn.I ->
+Leitung). Nicht erfasst (Stufe 4): Taktpuffer und Konstanten; die Einträge aus iob.js ohne PIP-Bit
+stehen in Graph.unmodelled.
 """
 import bisect
 import collections
 import re
 
-from . import bitmap, clbmux, switches
+from . import bitmap, clbmux, iobmux, switches
 from .lines import Lines
 
 LETTERS = "ABCDEFGHI"
@@ -55,11 +60,15 @@ class Graph:
         self.entries = entries or bitmap.load()
         self.lines = lines or Lines()
         self.conns = []
-        self.skipped = collections.Counter()  # nicht erfasste PIP-Bits nach Grund
+        self.unmodelled = []  # (Pin, Eintrag aus iob.js, Grund)
         self._cuts()
         self._pips()
         self._switches()
+        self._iobs()
         self._muxes()
+        used = {b for cn in self.conns for b in cn.bits}
+        self.skipped = collections.Counter(
+            "PIP %s" % self.lines.pip_name(e.key[0]) for e in self.entries if e.kind == "pip" and e.index not in used)
 
     # --- Segmente ------------------------------------------------------------------------------
     def _cuts(self):
@@ -159,6 +168,11 @@ class Graph:
             return r == "I"
         return kind in ("io6", "y") and r != "I"
 
+    @staticmethod
+    def _out_pip(c, ck, r, rk):
+        """X der CLBs in Spalte H kreuzt den Randkanal auf Höhe der Zeile b (col.I.* x row.R.b)"""
+        return c == "I" and rk == "b" and r != "I" and re.fullmatch(r"local\.[1-4]|long\.\d", ck)
+
     def _pips(self):
         ln = self.lines
         for e in self.entries:
@@ -169,13 +183,12 @@ class Graph:
             col, row = ln.col_name[gx], ln.row_name[gy]
             _, c, ck = _split(col)
             _, r, rk = _split(row)
-            if not (self._general_col(c, ck) and self._general_row(r, rk)):
-                self.skipped["IOB- oder Randleitung (Stufe 3)"] += 1
-                continue
+            if not (self._general_col(c, ck) and self._general_row(r, rk)) and not self._out_pip(c, ck, r, rk):
+                continue  # Eingangs-Pip eines IOB (_iobs) oder nicht erfasst
             name = "%s:%s" % (col, row)
-            if rk in ("io6", "y"):  # CLB-Ausgang X bzw. Y der CLB links der Spalte
+            if rk in ("io6", "y", "b"):  # CLB-Ausgang X (Spalte I: auf Höhe b) bzw. Y der CLB links der Spalte
                 clb = r + _prev(c)
-                src = "%s.%s" % (clb, "X" if rk == "io6" else "Y")
+                src = "%s.%s" % (clb, "Y" if rk == "y" else "X")
                 self.conns.append(Conn("out", src, self.seg_col(col, gy), [e.index], None, name))
             elif rk == "local.0":  # Verbindungspunkt der fünften Leitung
                 self.conns.append(Conn("junction", "col.%s.local.5@%s" % (c, _prev(r)),
@@ -202,6 +215,50 @@ class Graph:
             return "%s@%s" % (line, _prev(t[1]))
         return "%s@%s" % (line, t[1])
 
+    def _iobs(self):
+        """IOBs (iob.js): O- und T-Mux mit Codes, Eingangs-Pips; Pad -> CLB-Pin merkt sich pad_of_clb"""
+        self.iobs = iobmux.iobs(self.lines, self.entries)
+        pip_bit = {e.key[0]: e.index for e in self.entries if e.kind == "pip"}
+        self.pad_of_clb = {}  # (CLB-Pin, Seite T/L/B) -> Pin des Pads
+        for pin, iob in sorted(self.iobs.items()):
+            for which, lst, codes, bits in (("O", iob.o, iob.omux, iob.obits), ("T", iob.t, iob.tmux, iob.tbits)):
+                bitl = [bits[n] for n in sorted(bits)]
+                for code, k in sorted(codes.items()):
+                    ent = lst[k]
+                    src = self.iob_source(ent)
+                    if src is None:
+                        self.unmodelled.append((pin, ent.spec, "Quelle des %s-Mux" % which))
+                        continue
+                    self.conns.append(Conn("iob" + which.lower(), src, "%s.%s" % (pin, which), bitl, code,
+                                           "%s.%s %s" % (pin, which, ent.spec)))
+            for ent in iob.i:
+                if ent.kind == "clb":
+                    self.pad_of_clb[(ent.special, iob.style[0].upper())] = pin
+                    continue
+                bit = pip_bit.get(ent.g)
+                if ent.kind != "route" or not self._route_ok(ent) or bit is None:
+                    self.unmodelled.append((pin, ent.spec, "Eingang (%s)" % (ent.kind if bit else "kein PIP-Bit")))
+                    continue
+                self.conns.append(Conn("iobi", "%s.I" % pin, self.route_node(ent), [bit], None,
+                                       "%s:%s" % (ent.col, ent.row)))
+
+    def _route_ok(self, ent):
+        kind, letter, rest = _split(ent.line)
+        return self._general_col(letter, rest) if kind == "col" else self._general_row(letter, rest)
+
+    def route_node(self, ent):
+        gx, gy = (int(v) for v in ent.g.split("G"))
+        return self.seg_col(ent.line, gy) if ent.line.startswith("col.") else self.seg_row(ent.line, gx)
+
+    def iob_source(self, ent):
+        if ent.kind == "route":
+            return self.route_node(ent) if self._route_ok(ent) else None
+        if ent.kind in ("x", "y"):
+            return "%s.%s" % (ent.special, ent.kind.upper())
+        if ent.kind == "gclk":
+            return "GCLK"
+        return None
+
     def _muxes(self):
         ln = self.lines
         self.muxes = clbmux.muxes(ln, self.entries)
@@ -215,6 +272,12 @@ class Graph:
                 gx, gy = (int(v) for v in s.g.split("G"))
                 bits = [m.bits[n] for n in sorted(m.bits)]
                 src = self.mux_source(m, s, gx, gy)
+                if src.startswith("pad:"):  # Pad am Rand: dessen Eingang (iob.js)
+                    pin = self.pad_of_clb.get((sink, src[4]))
+                    if pin is None:
+                        self.unmodelled.append((sink, s.name, "kein Pad"))
+                        continue
+                    src = pin + ".I"
                 self.conns.append(Conn("mux", src, sink, bits, code, "%s %s" % (sink, s.line)))
 
     def mux_source(self, m, s, gx, gy):
