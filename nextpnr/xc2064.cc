@@ -99,7 +99,9 @@ struct Xc2064Impl : HimbaechelAPI
         specific.add_options()("pcf", po::value<std::string>(),
                                "PCF file with pin constraints: set_io [-nowarn] <port> <pin> (pins of the package, "
                                "e.g. P9)");
-        specific.add_options()("package", po::value<std::string>(), "package: PC68 (default, 58 I/O) or PD48 (40 I/O)");
+        specific.add_options()("package", po::value<std::string>(),
+                               "package: PC68 (default, 58 I/O), PD48 (40 I/O), PC44 (34 I/O) or PG68 (57 I/O, pins "
+                               "A2...L10)");
         specific.add_options()("out", po::value<std::string>(),
                                "write the configuration as text for xc2064pack (format: arch/xc2064/xc2064db/config.py)");
         specific.add_options()("clkbuf", "use the clock buffers GCLK/ACLK (their input codes are unknown, so the "
@@ -120,8 +122,8 @@ struct Xc2064Impl : HimbaechelAPI
         // des gewählten Gehäuses
         auto pkg = arch->args.options.find("package");
         package = pkg == arch->args.options.end() ? "PC68" : pkg->second.as<std::string>();
-        if (package != "PC68" && package != "PD48")
-            log_error("Unbekanntes Gehäuse '%s' (PC68 oder PD48)\n", package.c_str());
+        if (package != "PC68" && package != "PD48" && package != "PC44" && package != "PG68")
+            log_error("Unbekanntes Gehäuse '%s' (PC68, PD48, PC44 oder PG68)\n", package.c_str());
         arch->set_package(package);
     }
 
@@ -485,6 +487,68 @@ struct Xc2064Impl : HimbaechelAPI
         log_info("Constrained %d LUT3/FF, %d LUT4/FF and %d FGM/FF pairs, %d Q feedback inputs moved to input 3, "
                  "%d unused LUT inputs made don't-care.\n",
                  n3, n4, nm, moved, unused);
+        dff_timing();
+    }
+
+    // Timing des Speicherelements je nach Art (xc2064_arch_gen.py, set_timings): FF mit steigender/fallender Flanke
+    // oder Latch (transparent bei Takt 1 bzw. 0), dazu S/R -> Q und beim Latch D -> Q als kombinatorische Bögen.
+    // nextpnr bricht bei einer kombinatorischen Schleife ab; ein Bogen entfällt daher, wenn Q über Logik (LUTs,
+    // FGM, solche Bögen anderer Speicherelemente) zu seinem Eingang zurückführt.
+    void dff_timing()
+    {
+        if (!ctx->speed_grade)
+            return;
+        auto param = [](const CellInfo *ci, IdString p) {
+            auto it = ci->params.find(p);
+            return it != ci->params.end() && it->second.as_int64() != 0;
+        };
+        const IdString latch = ctx->id("LATCH"), clkinv = ctx->id("CLKINV");
+        // Netze (Namen), die Q über kombinatorische Wege erreicht
+        auto reaches = [&](const CellInfo *start) {
+            pool<IdString> seen;
+            std::vector<const NetInfo *> todo{start->getPort(id_Q)};
+            while (!todo.empty()) {
+                const NetInfo *n = todo.back();
+                todo.pop_back();
+                if (!n || seen.count(n->name))
+                    continue;
+                seen.insert(n->name);
+                for (auto &u : n->users) {
+                    const CellInfo *c = u.cell;
+                    if (c->type.in(id_XC2000_LUT3, id_XC2000_LUT4, id_XC2000_FGM))
+                        todo.push_back(c->getPort(id_O));
+                    else if (c->type == id_XC2000_DFF && (u.port.in(id_S, id_R) || (u.port == id_D && param(c, latch))))
+                        todo.push_back(c->getPort(id_Q));
+                }
+            }
+            return seen;
+        };
+        int ffs = 0, latches = 0, dropped = 0;
+        for (auto &cell : ctx->cells) {
+            CellInfo *ci = cell.second.get();
+            if (ci->type != id_XC2000_DFF)
+                continue;
+            bool is_latch = param(ci, latch), inv = param(ci, clkinv);
+            bool has_sr = ci->getPort(id_S) || ci->getPort(id_R);
+            auto seen = reaches(ci);
+            auto loops = [&](IdString port) { // erreicht Q diesen Eingang?
+                const NetInfo *n = ci->getPort(port);
+                return n && seen.count(n->name);
+            };
+            bool d_arc = is_latch && !loops(id_D);
+            bool sr_arc = has_sr && !loops(id_S) && !loops(id_R);
+            dropped += (is_latch && !d_arc) + (has_sr && !sr_arc);
+            IdString variant = ctx->idf("XC2000_DFF.%s%s%s%s", is_latch ? "L" : "FF", inv ? "N" : "P",
+                                        d_arc ? ".D" : "", sr_arc ? ".SR" : "");
+            int idx = ctx->get_cell_timing_idx(variant);
+            if (idx != -1)
+                ci->timing_index = idx;
+            (is_latch ? latches : ffs)++;
+        }
+        if (ffs || latches)
+            log_info("Timing of storage elements: %d flip-flops, %d latches, %d set/reset or transparency arcs left out "
+                     "(combinational loop).\n",
+                     ffs, latches, dropped);
     }
 
     bool clkbuf_enabled() const { return clkbuf; }

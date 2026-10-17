@@ -9,7 +9,7 @@ import csv
 import re
 import sys
 
-from . import bitmap, bitstream, clbmux, config, graph, lca, sources, switches
+from . import bitmap, bitstream, clbmux, config, graph, iobmux, lca, packages, sources, switches
 from .lines import Lines
 
 failed = []
@@ -135,6 +135,17 @@ def main():
         bad += [(f.split("/")[-1],) + x for x in b]
     check(not bad and total >= 18, "Richtung jedes benutzten Puffers: Bit 0 treibt nach unten bzw. rechts, Bit 1 "
           "nach oben bzw. links (%d Puffer in TEST1.RBT und AND_OR.BIT) %s" % (total, bad or ""))
+
+    print("Gehäuse (xc2064db.packages, Data Books 1993/1994)")
+    all_pads = [p[0] for p in iobmux.pads()]
+    counts = {}
+    for pkg in packages.PACKAGES:
+        m = packages.pads(pkg, all_pads)
+        counts[pkg] = len(m)
+        check(set(m.values()) <= set(all_pads) and len(set(m.values())) == len(m),
+              "%s: %d Pins, jeder auf einem eigenen Pad aus iob.js" % (pkg, len(m)))
+    check(counts == {"PC68": 58, "PD48": 40, "PC44": 34, "PG68": 57},
+          "Anzahl Benutzer-I/O: PC68 58, PD48 40, PC44 34, PG68 57 (ohne P43, PGA-Pin unbekannt)")
 
     decoded = sum(n for k, n in kinds.items() if k not in ("unused", "clkmux"))
     print("Abdeckung der %d benutzten Bits:" % (bitmap.NBITS - kinds["unused"]))

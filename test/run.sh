@@ -14,8 +14,9 @@
 #          und die allein aus dem Bitstream zurückgewonnene Netzliste (xc2064netlist) ist äquivalent zum RTL
 #   Fmax   kleinste Frequenz aller Takte nach dem Routing, mit FMIN=… (MHz) ist ein Wert darunter ein Fehler
 #   Routing  Iterationen und Laufzeit von router2 (nur Information)
-# Umgebungsvariablen: SEEDS="1 2 3 4 5 6" (zusätzlich zum nextpnr-Standard), FREQ=5, FMIN=…, TIMEOUT=300,
-# YOSYS=…, NEXTPNR=…
+# Dazu je Design ein Lauf ohne PCF in jedem weiteren Gehäuse (Spalte PCF: PD48, PC44, PG68).
+# Umgebungsvariablen: SEEDS="1 2 3 4 5 6" (zusätzlich zum nextpnr-Standard), PACKAGES="PD48 PC44 PG68",
+# FREQ=5, FMIN=…, TIMEOUT=300, YOSYS=…, NEXTPNR=…
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARCH="$(dirname "$HERE")"
 source "$ARCH/../../scripts/lib.sh"
@@ -23,6 +24,7 @@ source "$ARCH/../../scripts/lib.sh"
 YOSYS="${YOSYS:-yosys}"
 NEXTPNR="${NEXTPNR:-nextpnr-himbaechel}"
 SEEDS="${SEEDS-1 2 3 4 5 6}"
+PACKAGES="${PACKAGES-PD48 PC44 PG68}"
 TIMEOUT="${TIMEOUT:-300}"
 OUT="$FAT_BUILD/flows/xc2064/test"
 designs=("$@")
@@ -102,6 +104,48 @@ bitstream() {
 		gate_json "read_verilog $1.bit.v" "$1.bit.json" && equiv "$gold" "$1.bit.json"
 }
 
+# pnr_run <run> <PCF-Spalte> <Seed-Spalte> <nextpnr-Optionen...>: ein Lauf mit allen Prüfungen, eine Zeile
+pnr_run() {
+	local run="$1" m="$2" s="$3"
+	shift 3
+	rm -f "$run".*
+	local rc=0
+	XC2064_EXTRACT="$run.extracted.v" timeout "$TIMEOUT" "$NEXTPNR" --device XC2064 --json "$dir/$name.json" \
+		--write "$run.pnr.json" -l "$run.nextpnr.log" --freq "${FREQ:-5}" --timing-allow-fail \
+		--vopt "out=$run.cfg.txt" --post-route "$HERE/extract_netlist.py" "$@" >"$run.out" 2>&1 || rc=$?
+	local pnr=ok net=- pips=- bit=- f=
+	if [[ $rc -eq 124 ]]; then
+		pnr=Timeout
+	elif [[ $rc -ne 0 ]]; then
+		pnr=Fehler
+	else
+		f="$(fmax "$run.nextpnr.log")"
+		net=ok
+		{ gate_json "read_json $run.pnr.json" "$run.netz.json" && equiv "$gold" "$run.netz.json"; } || net=FEHLER
+		pips=ok
+		grep -q "^XC2064_EXTRACT: .* 0 Fehler$" "$run.out" || pips=FEHLER
+		[[ $pips == ok ]] && {
+			{ gate_json "read_verilog $run.extracted.v" "$run.pips.json" && equiv "$gold" "$run.pips.json"; } ||
+				pips=FEHLER
+		}
+		bit=ok
+		bitstream "$run" || bit=FEHLER
+	fi
+	local bad=0
+	[[ $pnr == ok && $net == ok && $pips == ok && $bit == ok ]] || bad=1
+	if [[ -n "${FMIN:-}" && -n "$f" ]] && awk -v f="$f" -v m="$FMIN" 'BEGIN { exit !(f < m) }'; then
+		f="$f<$FMIN"
+		bad=1
+	fi
+	# router2: Iterationen und Zeit (viele Iterationen = Netze wechseln sich an einem Draht ab)
+	local it t
+	it="$(grep -o 'iter=[0-9]*' "$run.nextpnr.log" 2>/dev/null | tail -1 | cut -d= -f2 || true)"
+	t="$(grep -o 'Router2 time [0-9.]*' "$run.nextpnr.log" 2>/dev/null | awk '{ printf "%.0f", $3 }' || true)"
+	row "$name" "$m" "$s" "$pnr" "$net" "$pips" "$bit" "${f:+$f MHz}" "${it:+$it It. ${t:-?} s}"
+	runs=$((runs + 1))
+	failed=$((failed + bad))
+}
+
 for d in "${designs[@]}"; do
 	d="$(realpath "$d")"
 	name="$(basename "${d%.v}")"
@@ -138,46 +182,15 @@ for d in "${designs[@]}"; do
 	[[ -f "$pcf" ]] && modes=(mit ohne)
 	for m in "${modes[@]}"; do
 		for s in default $SEEDS; do
-			run="$dir/pcf-$m-seed-$s"
 			opts=()
 			[[ $m == mit ]] && opts+=(--vopt "pcf=$pcf")
 			[[ $s != default ]] && opts+=(--seed "$s")
-			rm -f "$run".*
-			rc=0
-			XC2064_EXTRACT="$run.extracted.v" timeout "$TIMEOUT" "$NEXTPNR" --device XC2064 --json "$dir/$name.json" \
-				--write "$run.pnr.json" -l "$run.nextpnr.log" --freq "${FREQ:-5}" --timing-allow-fail \
-				--vopt "out=$run.cfg.txt" --post-route "$HERE/extract_netlist.py" "${opts[@]}" >"$run.out" 2>&1 || rc=$?
-			pnr=ok net=- pips=- bit=- f=
-			if [[ $rc -eq 124 ]]; then
-				pnr=Timeout
-			elif [[ $rc -ne 0 ]]; then
-				pnr=Fehler
-			else
-				f="$(fmax "$run.nextpnr.log")"
-				net=ok
-				{ gate_json "read_json $run.pnr.json" "$run.netz.json" && equiv "$gold" "$run.netz.json"; } || net=FEHLER
-				pips=ok
-				grep -q "^XC2064_EXTRACT: .* 0 Fehler$" "$run.out" || pips=FEHLER
-				[[ $pips == ok ]] && {
-					{ gate_json "read_verilog $run.extracted.v" "$run.pips.json" && equiv "$gold" "$run.pips.json"; } ||
-						pips=FEHLER
-				}
-				bit=ok
-				bitstream "$run" || bit=FEHLER
-			fi
-			bad=0
-			[[ $pnr == ok && $net == ok && $pips == ok && $bit == ok ]] || bad=1
-			if [[ -n "${FMIN:-}" && -n "$f" ]] && awk -v f="$f" -v m="$FMIN" 'BEGIN { exit !(f < m) }'; then
-				f="$f<$FMIN"
-				bad=1
-			fi
-			# router2: Iterationen und Zeit (viele Iterationen = Netze wechseln sich an einem Draht ab)
-			it="$(grep -o 'iter=[0-9]*' "$run.nextpnr.log" 2>/dev/null | tail -1 | cut -d= -f2 || true)"
-			t="$(grep -o 'Router2 time [0-9.]*' "$run.nextpnr.log" 2>/dev/null | awk '{ printf "%.0f", $3 }' || true)"
-			row "$name" "$m" "$s" "$pnr" "$net" "$pips" "$bit" "${f:+$f MHz}" "${it:+$it It. ${t:-?} s}"
-			runs=$((runs + 1))
-			failed=$((failed + bad))
+			pnr_run "$dir/pcf-$m-seed-$s" "$m" "$s" "${opts[@]}"
 		done
+	done
+	# die anderen Gehäuse: ohne PCF mit dem Standard-Seed (der Placer nimmt nur bebondete Pads)
+	for pkg in $PACKAGES; do
+		pnr_run "$dir/package-$pkg" "$pkg" default --vopt "package=$pkg"
 	done
 done
 

@@ -2,7 +2,7 @@
 """xc2064pack: Konfiguration als Text (Format siehe xc2064db/config.py, von nextpnr mit --vopt out= oder von
 xc2064unpack) -> XC2064-Bitstream als .RBT (genau im Aufbau von XACT) oder .BIT.
 
-    xc2064pack design.txt -o design.rbt [--package PC68|PD48] [--design NAME]
+    xc2064pack design.txt -o design.rbt [--package PC68|PD48|PC44|PG68] [--design NAME]
 
 Was der Text nicht festlegt, steht im Grundzustand von XACT (unbenutzte CLBs und IOBs, Optionen). Die Richtung
 der Repowering-Puffer leitet das Werkzeug aus dem Routing ab, wenn der Text keine bidi-Zeilen hat oder
@@ -14,7 +14,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
-from xc2064db import bitstream, config, graph  # noqa: E402
+from xc2064db import bitstream, config, graph, packages  # noqa: E402
 
 
 def main():
@@ -47,7 +47,9 @@ def main():
     if problems:
         sys.exit("xc2064pack: der Bitstream lässt sich nicht fehlerfrei dekodieren: %s" % "; ".join(problems[:5]))
 
-    package = args.package or next((l.name for l in lines if l.kind == "package"), "PC68")
+    package = (args.package or next((l.name for l in lines if l.kind == "package"), "PC68")).upper()
+    if package not in packages.PACKAGES:
+        sys.exit("xc2064pack: unbekanntes Gehäuse %s (%s)" % (package, ", ".join(packages.PACKAGES)))
     design = args.design or os.path.splitext(os.path.basename(args.output))[0]
     if args.output.upper().endswith(".BIT"):
         open(args.output, "wb").write(bitstream.write_bit(raw))

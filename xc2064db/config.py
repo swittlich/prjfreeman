@@ -2,7 +2,7 @@
 
 Eine Zeile je Eintrag, Namen wie bei Shirriff bzw. XACT, '#' leitet einen Kommentar ein:
 
-    device XC2064                   Kopf; package PC68 oder PD48 (Gehäuse, nur für den RBT-Kopf)
+    device XC2064                   Kopf; package PC68, PD48, PC44 oder PG68 (Gehäuse, nur für den RBT-Kopf)
     mux AB.A row.A.local.1          CLB-Eingang A..D, K und die gewählte Quellleitung (none: keine)
     mux P59.O col.I.local.4         Ausgangs-Mux eines IOB (Leitung, X/Y einer CLB wie AH.X, GCLK, ACLK)
     mux P59.T col.I.long.2          Tristate-Mux eines IOB: Quelle (Tristate), on (immer aktiv) oder off

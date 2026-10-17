@@ -314,7 +314,8 @@ class Builder:
                      ("K", "FF_CLK"),
                      ("A", "FF_S"), ("F_O", "FF_S"), ("FG_O", "FF_S"),
                      ("D", "FF_R"), ("G_O", "FF_R"), ("FG_O", "FF_R")):
-            self.pip(xy, s, d, "LOCAL")
+            # Set/Reset direkt von A bzw. D: T_RIO statt T_RLO (Pip-Klasse SRDIR, siehe clb_timing)
+            self.pip(xy, s, d, "SRDIR" if (s, d) in (("A", "FF_S"), ("D", "FF_R")) else "LOCAL")
         for s, cls in (("C", "CLKC"), ("G_O", "CLKG"), ("FG_O", "CLKG")):  # Takt über C bzw. G
             self.pip(xy, s, "FF_CLK", cls)
         bels.append(("FF", "DFF", 3, [("D", "FF_D", PinType.INPUT), ("CLK", "FF_CLK", PinType.INPUT),
@@ -380,11 +381,11 @@ class Builder:
 # dem Data Book 1993 (S. 2-213, 2-214; den XC2064 im PD48 gab es nur so, S. 2-208), -130 aus dem von 1994
 # (S. 2-221, 2-222). -70 und -100 stehen in beiden gleich.
 DATABOOK = {
-    #       T_ILO T_QLO T_CKO T_ICK T_CCO T_CIO T_PID T_OP T_THZ T_TON T_LI T_PL T_LP
-    "50": (15.0, 8.0, 15.0, 9.0, 19.0, 27.0, 8.0, 12.0, 20.0, 20.0, 15.0, 8.0, 0.0),
-    "70": (10.0, 6.0, 10.0, 7.0, 13.0, 20.0, 6.0, 9.0, 15.0, 15.0, 11.0, 6.0, 0.0),
-    "100": (8.0, 6.0, 7.0, 6.0, 9.0, 13.0, 4.0, 7.0, 11.0, 13.0, 8.0, 4.0, 0.0),
-    "130": (5.5, 3.7, 7.0, 2.5, 7.0, 13.0, 3.5, 5.5, 7.0, 11.0, 7.5, 2.0, 4.0),
+    #       T_ILO T_QLO T_CKO T_ICK T_CCO T_CIO T_PID T_OP T_THZ T_TON T_LI T_PL T_LP T_ITO T_RIO T_RLO
+    "50": (15.0, 8.0, 15.0, 9.0, 19.0, 27.0, 8.0, 12.0, 20.0, 20.0, 15.0, 8.0, 0.0, 20.0, 22.0, 28.0),
+    "70": (10.0, 6.0, 10.0, 7.0, 13.0, 20.0, 6.0, 9.0, 15.0, 15.0, 11.0, 6.0, 0.0, 14.0, 16.0, 21.0),
+    "100": (8.0, 6.0, 7.0, 6.0, 9.0, 13.0, 4.0, 7.0, 11.0, 13.0, 8.0, 4.0, 0.0, 10.0, 10.0, 14.0),
+    "130": (5.5, 3.7, 7.0, 2.5, 7.0, 13.0, 3.5, 5.5, 7.0, 11.0, 7.5, 2.0, 4.0, 8.0, 8.0, 11.0),
 }
 
 
@@ -393,13 +394,16 @@ def clb_timing(t):
     Kanal, schließt also Eingangs-Mux und Ausgangstreiber ein; T_QLO (Q über F/G zum Ausgang) ist die Laufzeit
     der Funktion selbst. Daraus: LUT = T_QLO, Ausgangstreiber = T_ILO - T_QLO, Clock-to-Q = T_CKO - Treiber,
     Setup an D = T_ICK - LUT (nicht negativ), Takt über C bzw. G später als über K. Gelatchter Eingang des IOB:
-    Takt bis Eingang T_LI, Setup und Hold am Pad T_PL, T_LP."""
+    Takt bis Eingang T_LI, Setup und Hold am Pad T_PL, T_LP.
+    Transparentes Latch: T_ITO = Eingang über F und das Latch zum Ausgang, also D -> Q = T_ITO - T_ILO.
+    Set/Reset: über F bzw. G (T_RLO = LUT + S/R -> Q + Treiber) ergibt S/R -> Q = T_RLO - T_ILO; direkt von A
+    bzw. D (T_RIO) ist der Weg um T_RIO - T_RLO + T_QLO länger als ohne LUT (Pip-Klasse SRDIR)."""
     ilo, qlo, cko, ick, cco, cio = t[:6]
     out = ilo - qlo
     ps = lambda v: int(round(max(v, 0) * 1000))  # noqa: E731
     return dict(lut=ps(qlo), out=ps(out), ckq=ps(cko - out), setup=ps(ick - qlo), clk_c=ps(cco - cko),
                 clk_g=ps(cio - qlo - cko), pid=ps(t[6]), op=ps(t[7]), tri=ps(max(t[8], t[9])), li=ps(t[10]),
-                pl=ps(t[11]), lp=ps(t[12]))
+                pl=ps(t[11]), lp=ps(t[12]), dq=ps(t[13] - ilo), sr=ps(t[15] - ilo), srdir=ps(t[14] - t[15] + qlo))
 
 
 # Interconnect: Das Data Book nennt keine Zahlen, nur das Modell ("Interconnect Performance"): eine Kette von
@@ -423,7 +427,8 @@ def set_timings(ch: Chip):
                 ("SM", 300 * s, R_SW * s, C_SEG, False), ("PIP", 200 * s, R_SW * s, C_SEG, False),
                 ("INMUX", 0, R_SW * s, 0, False), ("GCLK", T_GCLK * s, 0, 0, True),
                 ("XYDRV", c["out"], R_DRV * s, 0, True), ("LOCAL", 0, 0, 0, True),
-                ("CLKC", c["clk_c"], 0, 0, True), ("CLKG", c["clk_g"], 0, 0, True)):
+                ("CLKC", c["clk_c"], 0, 0, True), ("CLKG", c["clk_g"], 0, 0, True),
+                ("SRDIR", c["srdir"], 0, 0, True)):
             tmg.set_pip_class(grade=speed, name=name, delay=tv(delay), in_cap=tv(cap), out_res=tv(res),
                               is_buffered=buffered)
         for name, cap in (("SEG", C_SEG), ("LONG", C_LONG), ("CLKNET", 0)):
@@ -435,9 +440,26 @@ def set_timings(ch: Chip):
             lut = ch.timing.add_cell_variant(speed, cell)  # T_ILO hängt nicht von der Funktion ab
             for i in ins:
                 lut.add_comb_arc(i, "O", tv(c["lut"]))
-        dff = ch.timing.add_cell_variant(speed, "XC2000_DFF")
+        dff = ch.timing.add_cell_variant(speed, "XC2000_DFF")  # ohne pack() (geladenes *.pnr.json)
         dff.add_setup_hold("CLK", "D", ClockEdge.RISING, tv(c["setup"]), TimingValue(0))
         dff.add_clock_out("CLK", "Q", ClockEdge.RISING, tv(c["ckq"]))
+        # Varianten des Speicherelements, pack() wählt je Zelle (xc2064.cc, dff_timing): FF mit steigender bzw.
+        # fallender Flanke (FFP, FFN), Latch transparent bei Takt 1 bzw. 0 (LP, LN: Q folgt ab der öffnenden Flanke,
+        # Setup und Hold an der schließenden), dazu D -> Q (Latch, .D) und S, R -> Q (.SR) als kombinatorische
+        # Bögen; pack() lässt einen Bogen weg, wo er eine kombinatorische Schleife schlösse
+        rise, fall = ClockEdge.RISING, ClockEdge.FALLING
+        for kind, open_edge, close_edge in (("FFP", rise, rise), ("FFN", fall, fall), ("LP", rise, fall),
+                                            ("LN", fall, rise)):
+            for d_arc in (False, True) if kind[0] == "L" else (False,):
+                for sr_arc in (False, True):
+                    v = ch.timing.add_cell_variant(speed, "XC2000_DFF.%s%s%s" % (kind, ".D" * d_arc, ".SR" * sr_arc))
+                    v.add_setup_hold("CLK", "D", close_edge, tv(c["setup"]), TimingValue(0))
+                    v.add_clock_out("CLK", "Q", open_edge, tv(c["ckq"]))
+                    if d_arc:
+                        v.add_comb_arc("D", "Q", tv(c["dq"]))
+                    if sr_arc:
+                        v.add_comb_arc("S", "Q", tv(c["sr"]))
+                        v.add_comb_arc("R", "Q", tv(c["sr"]))
         inff = ch.timing.add_cell_variant(speed, "XC2000_INFF")  # gelatchter Eingang des IOB
         inff.add_setup_hold("K", "PAD", ClockEdge.RISING, tv(c["pl"]), tv(c["lp"]))
         inff.add_clock_out("K", "O", ClockEdge.RISING, tv(c["li"]))
@@ -452,9 +474,9 @@ def set_timings(ch: Chip):
 
 
 def set_packages(ch: Chip):
-    """Gehäuse PC68 und PD48 (xc2064db.packages): Pin-Name im Gehäuse -> IOB-Bel"""
+    """Gehäuse PC68, PD48, PC44 und PG68 (xc2064db.packages): Pin-Name im Gehäuse -> IOB-Bel"""
     by_pin = {p["pin"]: p for p in PAD_INFO}
-    for package in ("PC68", "PD48"):
+    for package in packages.PACKAGES:
         pkg = ch.create_package(package)
         for pin, pad in packages.pads(package, list(by_pin)).items():
             p = by_pin[pad]
