@@ -458,9 +458,10 @@ class Graph:
 
     def bidi_directions(self, raw):
         """Je Puffer (nur split_bidi): (Verbindung nach unten/rechts, Code der Richtung des Signals oder None).
-        Ohne den Puffer zerfällt sein Netz in zwei Seiten; liegt der Treiber (X/Y, Pnn.I) auf einer Seite und
-        eine Senke (CLB-Eingang, Pnn.O/T) auf der anderen, läuft das Signal von dort nach hier. None: eine
-        Seite unbenutzt (Richtung beliebig). Treiber auf beiden Seiten: ValueError."""
+        Ohne den Puffer zerfällt sein Netz in zwei Seiten; liegt der Treiber (X/Y, Pnn.I) auf einer Seite, zeigt
+        der Puffer von ihr weg, auch wenn auf der anderen Seite keine Senke hängt (sonst triebe er in das Netz
+        hinein wie ein zweiter Treiber; MAKEBITS setzt ihn ebenso). None: auf keiner Seite ein Treiber
+        (Richtung beliebig). Treiber auf beiden Seiten: ValueError."""
         assert self.split_bidi
         edges, bufs = [], {}
         for cn in self.conns:
@@ -472,11 +473,6 @@ class Graph:
 
         def is_driver(n):
             return re.fullmatch(r"[A-H][A-H]\.[XY]|P\d+\.I", n)
-
-        def is_sink(n):
-            if re.fullmatch(r"P\d+\.K", n):  # Takt eines IOB: nur, wenn sein Eingang gelatcht ist
-                return self.latched(n[:-2], raw)
-            return re.fullmatch(r"[A-H][A-H]\.[ABCDK]|P\d+\.[OT]", n)
 
         out = []
         for name, (down, up) in sorted(bufs.items()):
@@ -495,15 +491,14 @@ class Graph:
                 continue
             sides = [[n for n in parent if find(n) == find(x)] for x in (down.a, down.b)]
             drv = [any(is_driver(n) for n in s) for s in sides]
-            snk = [any(is_sink(n) for n in s) for s in sides]
             if drv[0] and drv[1]:
                 raise ValueError("Puffer %s: Treiber auf beiden Seiten" % name)
-            if drv[0] and snk[1]:
+            if drv[0]:
                 out.append((down, down.code))
-            elif drv[1] and snk[0]:
+            elif drv[1]:
                 out.append((down, up.code))
             else:
-                out.append((down, None))  # eine Seite unbenutzt: Richtung beliebig
+                out.append((down, None))  # kein Treiber: Richtung beliebig
         return out
 
     # --- Abfragen ------------------------------------------------------------------------------

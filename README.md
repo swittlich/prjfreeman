@@ -35,7 +35,7 @@ git submodule update --init arch/xc2064/shirriff-xc2064 arch/xc2064/openxc2064
 | Routing-Graph | Aus den Daten gebaut (`xc2064db.graph`): jeder Pip ist ein PIP-Bit, ein Magic-Bit einer Switch-Matrix oder ein Mux-Code eines CLB-Eingangs bzw. eines IOB-Multiplexers, die Leitungen tragen Shirriffs bzw. XACTs Namen. Auch die Eingänge der beiden Taktpuffer sind Mux-Codes | `XC2064-def.txt`, `draw.js`, `clb.js`, `iob.js`, Taktpuffer-Codes aus `MAKEBITS`; geprüft mit `TEST1.LCA` (siehe [Datenquellen](#datenquellen-und-bitstream-werkzeuge)) |
 | Switch-Matrizen | 2 je Kreuzung (8.1, 8.2), an den vier Ecken keine, 8 Pins. Innen 20 Verbindungen nach dem Muster der Magic-Bits (jeder Pin mit 5 der 7 anderen), am Rand dasselbe ohne die Pins der fehlenden Seite. 8.1 verbindet senkrecht local.1/2, 8.2 local.3/4 mit je zwei waagerechten Leitungen (in Zeile I gespiegelt) | Magic-Bits; Datenblatt Bild 7b; Gegenprobe `possible_connections` (openxc2064) |
 | Einzelsegmente | Senkrecht local.1-4 von Matrix zu Matrix und die fünfte Leitung local.5, waagerecht 4 (innen local.1/3/4/5, am Rand local.1-4) | Datenblatt *General-Purpose Interconnect*: 5 senkrechte, 4 waagerechte Segmente je eine Blocklänge |
-| Repowering-Puffer | 158, je einer auf jedem Einzelsegment, das eine Grenze der 9 Sektionen kreuzt: senkrecht kurz vor dem Kanal der Zeilen D und G, waagerecht vor dem der Spalten D und G. Ein Bit wählt die Richtung (0: nach unten bzw. rechts, 1: nach oben bzw. links), aus ist er nie. Deshalb trennt er das Segment im Routing-Graphen nicht; die Richtung folgt aus dem Routing (`xc2064db.graph.bidi_bit`), wie bei XACT | Bidi-Bits der Bitkarte (G-Lage = Leitung); Richtung belegt mit `TEST1.RBT` und `AND_OR.BIT` (18 Puffer, kein Widerspruch); Datenblatt *Interconnect* |
+| Repowering-Puffer | 158, je einer auf jedem Einzelsegment, das eine Grenze der 9 Sektionen kreuzt: senkrecht kurz vor dem Kanal der Zeilen D und G, waagerecht vor dem der Spalten D und G. Ein Bit wählt die Richtung (0: nach unten bzw. rechts, 1: nach oben bzw. links), aus ist er nie. Deshalb trennt er das Segment im Routing-Graphen nicht; die Richtung folgt aus dem Routing (`xc2064db.graph.bidi_bit`), wie bei XACT: vom Treiber des Netzes weg, auch wenn dahinter nur ein unbenutztes Stück liegt | Bidi-Bits der Bitkarte (G-Lage = Leitung); Richtung belegt mit `TEST1.RBT` und `AND_OR.BIT` (30 Puffer, kein Widerspruch) und mit MAKEBITS; Datenblatt *Interconnect* |
 | Fünfte senkrechte Leitung | Läuft an keiner Matrix vorbei. Ihr Stück der Zeile R beginnt an einem Verbindungspunkt oben im Kanal (`row.R.local.0`), kreuzt dort local.3/4 auf der Spur von local.6, knickt auf die Spur von local.5, läuft an der CLB vorbei (B, C, Y) und kreuzt im Kanal darunter noch local.0, local.3 und local.4 | Datenblatt Bild 7b (gestrichelt); belegt durch Netz `p1` in `TEST1.LCA` |
 | Funktionsgeneratoren | `F`, `G` (Primitiv `XC2000_LUT3`): Eingang 1 aus {A, B}, Eingang 2 aus {B, C}, Eingang 3 aus {C, D, **Q**} | `clb.js` |
 | 4-Variablen-Modus | `FG` (`XC2000_LUT4`): Eingänge wie F/G, **B** wählt zwischen F und G (I[3]), belegt beide | `clb.js` |
@@ -423,9 +423,10 @@ Was die Daten über das Original sagen:
   G-Lage, und die liegt immer auf genau einem Einzelsegment: 86 senkrecht (alle local.1–5 jeder Spalte
   bei G 109 und 52, also kurz vor den Kanälen der Zeilen D und G), 72 waagerecht (bei G 65 und 125, vor
   den Spalten D und G). Das sind die bidirektionalen Puffer an den Grenzen der 9 Sektionen aus dem
-  Datenblatt. Ihre Richtung zeigen die XACT-Bitstreams: Bei jedem der 18 Puffer, über die ein Netz von
-  seinem Treiber zu einer Senke läuft, ist das Bit 0, wenn das Signal nach unten bzw. rechts läuft, und
-  1, wenn es nach oben bzw. links läuft. Puffer auf unbenutzten Segmenten setzt XACT mal so, mal so.
+  Datenblatt. Ihre Richtung zeigen die XACT-Bitstreams: Bei jedem der 30 Puffer, an dessen einer Seite
+  ein Netz mit seinem Treiber hängt, ist das Bit 0, wenn er vom Treiber weg nach unten bzw. rechts zeigt,
+  und 1, wenn nach oben bzw. links, auch wenn hinter ihm keine Senke liegt (sonst triebe er in das Netz
+  hinein wie ein zweiter Treiber). Nur Puffer ohne Treiber auf beiden Seiten setzt XACT mal so, mal so.
 - **CLB-Konfiguration:** 37 Bits je CLB, Bedeutung wie in Shirriffs `clb.js` mit einer Ausnahme beim
   Takt: Das Bit „CLB AB“ wählt C; sonst gilt K, wenn der K-Mux eine Quelle hat, und G, wenn nicht, wobei
   G gegenüber K invertiert ankommt, und ein Latch kehrt „CLK Invert“ um. Shirriff verwechselt hier K und
@@ -545,22 +546,22 @@ die Codes geben XACTs eigenes Modell wieder.
 **Gegenprobe mit MAKEBITS:** `tools/xc2064lca` schreibt eine Konfiguration von nextpnr als LCA-Datei (Netze
 aus dem Zusammenhang der Pips, an den Taktpuffern getrennt, mit den G-Lagen jedes Elements; je Block Base,
 Config und Equate; Pads mit XACTs Namen `PADn`). MAKEBITS macht daraus einen Bitstream, der mit dem von
-`xc2064pack` übereinstimmen muss, bis auf Puffer, deren Richtung das Routing nicht festlegt (`--free-bidi`):
+`xc2064pack` bitgenau übereinstimmen muss:
 
 ```bash
 python3 arch/xc2064/tools/xc2064lca design.cfg.txt -o DESIGN.LCA   # dann in DOSBox: MAKEBITS -B DESIGN < NUL
-python3 arch/xc2064/tools/xc2064pack design.cfg.txt -o design.rbt --compare DESIGN.RBT --free-bidi
+python3 arch/xc2064/tools/xc2064pack design.cfg.txt -o design.rbt --compare DESIGN.RBT
 ```
 
-Ergebnis (17.10.2026) für 43 Läufe: aus dem Regressionstest je Beispiel der Standard-Seed mit und ohne PCF
-(damals ohne Taktpuffer), mit den Taktpuffern (damals `--vopt clkbuf`) mit und ohne PCF und das PD48 (40),
-dazu 3 einer Variante von `bcd7seg.v`. 2 Bitstreams sind bitgleich, die übrigen 41 weichen nur in 552 Bits
-von Repowering-Puffern ab, und zwar nur auf Segmenten, deren Richtung das Routing nicht festlegt.
-Alle Pips, Switch-Verbindungen, Muxe (auch beide Taktpuffer, GCLK an den K-Muxen in `inreg.v`), CLBs
-mit ihren Gleichungen, IOBs und Optionen setzt MAKEBITS genau wie `xc2064pack`. Ebenso die 4 Läufe mit
-Takten an P11 und P46 aus Stufe 12 (`blinky.v` mit dem Takt an P11, `latch_sr.v` mit `clk` an P46 und
-`en` an P11, mit `clk` an P9 und `en` an P11 sowie ohne PCF im PG68): 1 bitgleich, 3 bis auf Puffer
-ohne vom Routing festgelegte Richtung.
+Ergebnis (17.10.2026) für 44 Läufe: aus dem Regressionstest je Beispiel der Standard-Seed mit und ohne PCF
+(mit Taktpuffern), `--vopt noclkbuf` mit und ohne PCF und das PD48 (40), dazu die 4 Läufe mit Takten an P11
+und P46 aus Stufe 12 (`blinky.v` mit dem Takt an P11, `latch_sr.v` mit `clk` an P46 und `en` an P11, mit
+`clk` an P9 und `en` an P11 sowie ohne PCF im PG68). Alle 44 Bitstreams sind bitgleich, in allen 11.360
+Bits: Pips, Switch-Verbindungen, Muxe (auch beide Taktpuffer und GCLK an den K-Muxen in `inreg.v`), CLBs
+mit ihren Gleichungen, IOBs, Optionen und die Richtung jedes Repowering-Puffers. Der erste Vergleich hatte
+nur bei den Puffern abgewichen: `xc2064pack` ließ Puffer, an deren einer Seite ein getriebenes Netz endet,
+in der Grundstellung, die in das Netz hinein zeigen kann; MAKEBITS zeigt sie vom Treiber weg. Das tut
+jetzt auch `xc2064db.graph.bidi_directions`.
 
 ## Ausbaustufen
 
@@ -647,6 +648,10 @@ ohne vom Routing festgelegte Richtung.
      Takte an P11 und P46 wie `xc2064pack`. Damit hängt jeder Bitstream mit einem Takt vom Pad an den
      Puffer-Codes aus MAKEBITS; wer für einen ersten Versuch am Chip nur Bits programmieren will, die auch
      XACT-Bitstreams benutzen, nimmt `--vopt noclkbuf`
+  13. erledigt: Richtung der Repowering-Puffer wie bei XACT auch dort, wo hinter dem Puffer keine Senke
+     liegt: vom Treiber weg (vorher Grundstellung, die als zweiter Treiber in das Netz zeigen konnte). Die
+     XACT-Bitstreams bestätigen es an 30 Puffern, und 44 Läufe sind mit MAKEBITS bitgleich (siehe
+     [Taktpuffer](#taktpuffer-eingänge-makebits)); `xc2064pack --compare` vergleicht dafür bitgenau
 
   Offen auf dem Weg zum geladenen Chip (alles braucht einen echten XC2064): der erste Versuch mit dem
   STM32-Lader (D/P-Pin) und die Flanke des IOB-FF (laut Data Book steigend) sowie Shirriffs K-Mux-Codes.
