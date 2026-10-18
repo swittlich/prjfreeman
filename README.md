@@ -22,10 +22,14 @@ Grundlagen:
   Taktpuffer-Eingänge und Gegenprobe für `xc2064pack` (siehe [Taktpuffer](#taktpuffer-eingänge-makebits));
   `XNFMAP` und `MAP2LCA` als Vergleich für die Abbildung auf CLBs (siehe [XNF für XACT](#xnf-für-xact-toolsxc2064xnf))
 
-Beide Repos sind Submodules unter `arch/xc2064/external` (siehe [Datenquellen](#datenquellen-und-bitstream-werkzeuge)):
+Beide Repos sind Submodules dieses Repos ([swittlich/prjfreeman](https://github.com/swittlich/prjfreeman)) unter
+`external/`, auf den Commits aus [Datenquellen](#datenquellen-und-bitstream-werkzeuge). Das Repo liegt als
+`arch/xc2064` in dem Repo, das nextpnr und yosys baut (`scripts/build-nextpnr.sh`); alle Pfade in diesem README
+gehen von dessen Wurzel aus:
 
 ```bash
-git submodule update --init arch/xc2064/external/shirriff-xc2064 arch/xc2064/external/openxc2064
+git clone --recurse-submodules https://github.com/swittlich/prjfreeman arch/xc2064   # neu klonen, mit Submodules
+git -C arch/xc2064 submodule update --init                                            # schon geklont: Submodules nachholen
 ```
 
 ## Was nachgebildet ist

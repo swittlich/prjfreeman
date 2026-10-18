@@ -3,3 +3,4 @@
 	url = https://github.com/shirriff/xc2064
 [submodule "openxc2064"]
 	path = external/openxc2064
+	url = https://github.com/rates37/openxc2064
