@@ -16,12 +16,12 @@
 - `MAKEBITS` from Xilinx XACT 5.2.0 as a black box (in DOSBox, outside the repo): codes of the
   clock buffer inputs and cross-check for `xc2064pack` (see [Clock buffer inputs](xact.md#clock-buffer-inputs-makebits));
   `XNFMAP` and `MAP2LCA` for comparing the mapping onto CLBs (see [XNF for XACT](xact.md#xnf-for-xact-toolsxc2064xnf))
-- further prior work: [JohnDMcMaster/project2064](https://github.com/JohnDMcMaster/project2064).
+- further prior work: [JohnDMcMaster/project2064](https://github.com/JohnDMcMaster/project2064)
 
 ## Submodules
 
-The path to a real [bitstream](bitstream.md) builds on two submodules in `external/`. Nothing is changed in the submodules
-themselves; both are only read.
+The path to a real [bitstream](bitstream.md) builds on two submodules in `external/`. Nothing is changed in
+the submodules themselves; both are only read.
 
 | Submodule | Commit | Used |
 |---|---|---|

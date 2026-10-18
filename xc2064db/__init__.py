@@ -1,7 +1,7 @@
 """XC2064 data from the submodules in external/, as the common basis for the chipdb generator
 (names and connections) and the bitstream tools xc2064unpack/xc2064pack (bit map).
 
-Sources (see README):
+Sources (see docs/data-sources.md):
   shirriff-xc2064  Ken Shirriff's reverse engineering: XC2064-def.txt (all 11,360 bits), line names
                    (html/draw.js), CLB input muxes (html/clb.js), IOBs (html/iob.js)
   openxc2064       cross-check: switch matrix pattern, bitstreams generated with XACT

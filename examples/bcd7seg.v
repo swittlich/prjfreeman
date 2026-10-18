@@ -2,7 +2,7 @@
 // (PRESCALE clock cycles) advances the counter while en is high; the display moves to the next digit on every clock
 // cycle (an, active low) and shows its value (seg = gfedcba, active low), both registered. Synchronous reset rst.
 // PRESCALE 16 occupies 54 CLBs (routes quickly in all runs of the regression test), 10 58 CLBs, 50 61 CLBs
-// (then router2 runs into the timeout in some runs, see README).
+// (then router2 runs into the timeout in some runs, see docs/examples.md).
 module bcd7seg #(
 	parameter PRESCALE = 16
 ) (

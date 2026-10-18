@@ -8,9 +8,9 @@ The model was built in stages; the other documents refer to them as "stage N".
   model only moves pure inputs into the IOB.
 - **Search deeper for FGM**: so far `xc2064_fgm` only merges the D LUT with LUTs directly in front of it.
   Cuts across several levels (or FGM already before `abc`) would find more cases.
-- **Real hardware:** open on the way to a loaded chip (all of it needs a real XC2064): the first attempt with the
-STM32 loader (D/P pin), and the edge of the IOB FF (rising according to the Data Book) as well as Shirriff's
-K mux codes. The clock buffer codes come from XACT's model, not from the chip.
+- **Real hardware** (all of it needs a real XC2064): the first attempt with the STM32 loader (D/P pin), and the
+  edge of the IOB FF (rising according to the Data Book) as well as Shirriff's K mux codes. The clock buffer
+  codes come from XACT's model, not from the chip.
 
 ## Towards a real bitstream
 
@@ -19,6 +19,7 @@ configuration bits (LUT contents, IOB options, PIPs, switch matrices). For loada
 the model must correspond exactly to the PIPs of the original. That is why the routing graph is built from
 this data, with Shirriff's line names. The bitstream is then generated, as for iCE40, ECP5 and
 GateMate, in two steps (implemented in stage 5, see [Bitstream](bitstream.md)):
+
 1. nextpnr writes a readable text file with `--vopt out=<file>`: the used pips and the
    configuration of each Bel (LUT contents, muxes, IOB mode) with Shirriff's or XACT's names.
 2. A dedicated tool in `arch/xc2064` (`xc2064pack`, Python) turns it into the RBT or BIT file,
@@ -73,32 +74,32 @@ XC2064-PD48 (success: D/P pin high); that is why the PD48 package exists alongsi
    independent cross-check with Shirriff's decoder (QuickJS, `xc2064shirriff`) in `run.sh` and
    `bitstreams.sh`: it decodes all XACT bitstreams and all generated bitstreams the same way as the package
 10. done: larger test designs (`uart_tx.v` 46 CLBs, `ampel.v` 19, `bcd7seg.v` 54) with PCF. Found
-   and fixed under load: the placer found no legal placement for dense designs (LUT3 pairs in
-   `pack()`), CLBs with three outgoing signals were allowed (new rule: at most X and Y),
-   the Q feedback of a G LUT went through the routing (now input 3), yosys re-encoded state machines
-   (now `-nofsm`) and the comparison failed on a ROM in the RTL (`proc -norom`). Limit: from about
-   90% occupied CLBs, router2 in the debug build needs minutes or does not finish within 300 s
+    and fixed under load: the placer found no legal placement for dense designs (LUT3 pairs in
+    `pack()`), CLBs with three outgoing signals were allowed (new rule: at most X and Y),
+    the Q feedback of a G LUT went through the routing (now input 3), yosys re-encoded state machines
+    (now `-nofsm`) and the comparison failed on a ROM in the RTL (`proc -norom`). Limit: from about
+    90% occupied CLBs, router2 in the debug build needs minutes or does not finish within 300 s
 11. done: codes of the clock buffer inputs with MAKEBITS as an oracle (see
-   [Clock buffer inputs](xact.md#clock-buffer-inputs-makebits)): `iobmux.clkmuxes` with 6 or 7 sources, all of them
-   except the oscillator in the graph, `mux CLK.AA.I …` in the text format; with this the package decodes all
-   used bits. Designs routed with `--vopt clkbuf` can be packed (in the regression test per design with and
-   without PCF). The PIPs from ACLK onto the long.2 are directional. `xc2064lca` writes a configuration as
-   LCA for MAKEBITS; for this, iob.js entries without a line (X/Y directly to the pad, GCLK at P9.O and the
-   K muxes) now have their crossing. `xc2064db.bitstream` also reads RBT files from MAKEBITS 5.2.0
+    [Clock buffer inputs](xact.md#clock-buffer-inputs-makebits)): `iobmux.clkmuxes` with 6 or 7 sources, all of them
+    except the oscillator in the graph, `mux CLK.AA.I …` in the text format; with this the package decodes all
+    used bits. Designs routed with `--vopt clkbuf` can be packed (in the regression test per design with and
+    without PCF). The PIPs from ACLK onto the long.2 are directional. `xc2064lca` writes a configuration as
+    LCA for MAKEBITS; for this, iob.js entries without a line (X/Y directly to the pad, GCLK at P9.O and the
+    K muxes) now have their crossing. `xc2064db.bitstream` also reads RBT files from MAKEBITS 5.2.0
 12. done: clock buffers as the default. `--vopt noclkbuf` turns them off, `--vopt clkbuf` remains allowed
-   and no longer changes anything. P11 and P46 are further pads of GCLK and ACLK respectively: `pack()` places
-   clocks without a pin there if P9 or P43 is taken or not bonded (PG68: ACLK via P46), and there, too,
-   `preRoute()` routes a clock that clocks only storage elements entirely via the buffer (two such clocks on
-   one buffer: the one with the most storage elements gets it). In the regression test the two extra runs
-   per design run without buffers (`noclkbuf`), all others must use one; MAKEBITS sets clocks on P11 and
-   P46 the same way as `xc2064pack`. This makes every bitstream with a clock from a pad depend on the
-   buffer codes from MAKEBITS; anyone who, for a first attempt on the chip, wants to program only bits
-   that XACT bitstreams also use should take `--vopt noclkbuf`
+    and no longer changes anything. P11 and P46 are further pads of GCLK and ACLK respectively: `pack()` places
+    clocks without a pin there if P9 or P43 is taken or not bonded (PG68: ACLK via P46), and there, too,
+    `preRoute()` routes a clock that clocks only storage elements entirely via the buffer (two such clocks on
+    one buffer: the one with the most storage elements gets it). In the regression test the two extra runs
+    per design run without buffers (`noclkbuf`), all others must use one; MAKEBITS sets clocks on P11 and
+    P46 the same way as `xc2064pack`. This makes every bitstream with a clock from a pad depend on the
+    buffer codes from MAKEBITS; anyone who, for a first attempt on the chip, wants to program only bits
+    that XACT bitstreams also use should take `--vopt noclkbuf`
 13. done: direction of the repowering buffers as with XACT, also where there is no sink behind the
-   buffer: away from the driver (previously the default setting, which could point into the net as a
-   second driver). The XACT bitstreams confirm this on 30 buffers, and 44 runs are bit-identical with
-   MAKEBITS (see [Clock buffer inputs](xact.md#clock-buffer-inputs-makebits)); `xc2064pack --compare` compares
-   bit-exactly for this purpose
+    buffer: away from the driver (previously the default setting, which could point into the net as a
+    second driver). The XACT bitstreams confirm this on 30 buffers, and 44 runs are bit-identical with
+    MAKEBITS (see [Clock buffer inputs](xact.md#clock-buffer-inputs-makebits)); `xc2064pack --compare` compares
+    bit-exactly for this purpose
 
 After every stage, `test/run.sh` must pass for all examples (Net, Pips and, since stage 5, Bitstream). The
 GUI keeps CLB and IOBs in datasheet style; only the channels follow the line layout from Shirriff.
