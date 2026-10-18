@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Sebastian Wittlich
 // Tristate and inout for the XC2064 model: a 4-bit bus with direction switching and a single
 // tristate output. Pins in tristate.pcf.
 // The enables are active low like T in the IOB (T = 1 turns the output driver off, datasheet). That way

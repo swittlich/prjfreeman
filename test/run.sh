@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Sebastian Wittlich
 # Regression test for xc2064: synthesis, place & route over several seeds (with and without PCF) and a
 # formal comparison of every result with the RTL.
 #   test/run.sh [design.v ...]          without arguments all examples/*.v

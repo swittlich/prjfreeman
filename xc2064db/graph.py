@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Sebastian Wittlich
 """Routing graph of the XC2064 built from the data (as of stage 3: the CLB array with its channels, and the IOBs).
 
 Nodes are electrically connected pieces of line; connections are the programmable points of the bit map (PIP

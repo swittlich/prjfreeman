@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Sebastian Wittlich
 """xc2064xnf: Verilog (via yosys) or yosys JSON -> XNF netlist for XACT's XC2000 flow (xc2064db/xnf.py).
 
     xc2064xnf design.v [more.v ...] -o DESIGN.XNF [--pcf design.pcf] [--top top] [--lut] [--json design.json]

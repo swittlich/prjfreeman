@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Sebastian Wittlich
 # Builds the Yosys plugin of the xc2064 architecture.
 #   make                                  -> build/xc2064.so against the yosys-config in PATH (build/install)
 #   make YOSYS_CONFIG=<yosys-build>/yosys-config BUILD=build-debug

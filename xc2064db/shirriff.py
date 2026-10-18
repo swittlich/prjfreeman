@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Sebastian Wittlich
 """Cross-check with Shirriff's bitstream decoder: his scripts (external/shirriff-xc2064/html: draw.js,
 karnaugh.js, parse.js, iob.js, clb.js) run without a browser in QuickJS (Python package quickjs), decode an
 RBT file with his own reader, and the result is compared with our own decoding (config.decode, tables

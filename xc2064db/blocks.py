@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Sebastian Wittlich
 """Configuration of the logic blocks (CLB), the IOBs and the remaining options: bits <-> fields.
 
 CLB (37 bits per CLB, names from XC2064-def.txt, meaning according to Shirriff's clb.js, checked with TEST1.LCA).

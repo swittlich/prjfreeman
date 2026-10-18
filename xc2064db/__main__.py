@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Sebastian Wittlich
 """Coverage report and cross-checks of the data sources:  python3 -m xc2064db  (in arch/xc2064)
 
 Exits with an error if a cross-check fails. Coverage: which bits the package decodes (since the codes of the

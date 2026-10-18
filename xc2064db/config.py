@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Sebastian Wittlich
 """Configuration as a readable text file (the format between nextpnr and xc2064pack; way back: xc2064unpack).
 
 One line per entry, names as in Shirriff or XACT, '#' starts a comment:

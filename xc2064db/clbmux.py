@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Sebastian Wittlich
 """CLB inputs A, B, C, D and K: the sources of each input mux and which mux code selects which source,
 modelled on Shirriff's clb.js (generateClbPips, processClbPip).
 

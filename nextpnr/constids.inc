@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Sebastian Wittlich
 // Cell types (primitives from yosys)
 X(XC2000_LUT3)
 X(XC2000_LUT4)

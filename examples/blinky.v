@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Sebastian Wittlich
 // Blinky for the XC2064 model: 16-bit counter, the upper 8 bits on LEDs.
 // The pins are in blinky.pcf (PLCC68 pin numbers). The clock is on P9, the pin with the global
 // clock buffer GCLK -> K of all CLBs. Without an entry in the PCF file the placer decides; nextpnr then

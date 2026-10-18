@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Sebastian Wittlich
 // 8-bit shift register with parallel load and enable: load loads din, otherwise en shifts sin into q[0] and
 // q[i-1] into q[i]; without en it holds. Each bit is a function of 5 signals (load, din[i], en, q[i-1]
 // and its own q[i]): load ? din[i] : (en ? q[i-1] : q[i]). That fits into the mux mode FGM of a CLB

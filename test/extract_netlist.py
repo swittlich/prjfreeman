@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Sebastian Wittlich
 # nextpnr --post-route: recover the netlist solely from the occupied Bels and the used Pips,
 # i.e. from what a bitstream records. From every Bel output the script follows the used
 # Pips to the Bel inputs it reaches. Names (nets, ports) and cell parameters come from the

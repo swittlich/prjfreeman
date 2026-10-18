@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Sebastian Wittlich
 """xc2064shirriff: cross-check of a bitstream with Shirriff's decoder (shirriff-xc2064/html, in QuickJS without a
 browser, see xc2064db/shirriff.py). Shirriff's code reads the RBT file itself and decodes it; the result must
 match our own decoding: the interior of each CLB (base, inputs, truth tables, X/Y, Q, set/reset,

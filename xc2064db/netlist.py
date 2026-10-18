@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Sebastian Wittlich
 """Netlist from a configuration (bitstream): the way back for the formal comparison in the regression test.
 
 Nets are the nodes of the routing graph that the programmed connections tie together (buffers at the section

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Sebastian Wittlich
 """xc2064unpack: XC2064 bitstream (.BIT or .RBT from XACT) -> configuration as text (format: see
 xc2064db/config.py). Exits with an error if a programmed bit or a mux code is not in the bit map.
 

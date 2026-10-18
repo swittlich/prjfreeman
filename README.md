@@ -64,6 +64,7 @@ Contributions are welcome: bug reports, questions, improvements to the model, th
 and above all anyone who can try a bitstream on a real XC2064. Please open an issue or a pull request on
 [GitHub](https://github.com/swittlich/prjfreeman). Before submitting changes to the model or the tools, run
 `arch/xc2064/test/run.sh` (every run must pass) and, for the bitstream tools, `arch/xc2064/test/bitstreams.sh`.
+Contributions are accepted under the same license as the project (GPL-3.0-or-later, see [License](#license)).
 
 ## Acknowledgements
 
@@ -72,3 +73,16 @@ This work builds on Ken Shirriff's reverse engineering of the XC2064
 [shirriff/xc2064](https://github.com/shirriff/xc2064)), the XACT bitstreams in
 [rates37/openxc2064](https://github.com/rates37/openxc2064) and the Xilinx Data Books. All references are
 listed in [Data sources](docs/data-sources.md#references).
+
+## License
+
+Copyright (C) 2026 Sebastian Wittlich
+
+This project is free software: you can redistribute it and/or modify it under the terms of the
+[GNU General Public License](LICENSE) as published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version. In short: you may use, study, change and share it, but
+whoever distributes it or a modified version must keep the copyright notices and make the complete source
+code available under the same license.
+
+The submodules in `external/` keep their own licenses. As usual with the GPL, your own designs and the
+netlists and bitstreams the tools generate from them are not affected.

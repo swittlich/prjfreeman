@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Sebastian Wittlich
 # Pin assignment for tristate.v: set_io <port> <PLCC68 pin>, all on the top edge
 set_io clk     P9
 set_io oe_n    P8

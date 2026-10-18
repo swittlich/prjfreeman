@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Sebastian Wittlich
 // UART transmitter 8N1: start latches data and sends a start bit, 8 data bits (LSB first) and a stop bit; one bit
 // lasts CLKS_PER_BIT clock cycles (default 434: 115200 baud at 50 MHz; on the XC2064 rather 9600 baud at 4.17 MHz).
 // busy is 1 while transmitting. Synchronous reset rst.

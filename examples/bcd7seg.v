@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Sebastian Wittlich
 // Four-digit BCD counter with a multiplexed 7-segment display, a design close to all 64 CLBs: a prescaler
 // (PRESCALE clock cycles) advances the counter while en is high; the display moves to the next digit on every clock
 // cycle (an, active low) and shows its value (seg = gfedcba, active low), both registered. Synchronous reset rst.

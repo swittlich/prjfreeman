@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Sebastian Wittlich
 """Line names and their positions from Shirriff's draw.js.
 
 Every vertical line is named col.<column>.<kind>, every horizontal one row.<row>.<kind> (columns and rows

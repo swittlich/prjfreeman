@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Sebastian Wittlich
 # Chip database for a model of the Xilinx XC2064 (1985, the first FPGA) as a Himbächel uarch.
 #
 # References: XC2000 datasheet; Ken Shirriff's reverse engineering (github.com/shirriff/xc2064, as the

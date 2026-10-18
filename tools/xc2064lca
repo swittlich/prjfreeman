@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Sebastian Wittlich
 """xc2064lca: configuration as text (format: see xc2064db/config.py, from nextpnr with --vopt out=) -> LCA file
 for XACT, for the cross-check with MAKEBITS (xc2064db/lca.py, write).
 

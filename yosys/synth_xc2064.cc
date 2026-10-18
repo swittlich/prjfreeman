@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Sebastian Wittlich
 /*
  * synth_xc2064 – Yosys synthesis for the XC2064 model (as a plugin).
  *

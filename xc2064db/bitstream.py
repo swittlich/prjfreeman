@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Sebastian Wittlich
 """Reading XC2064 bitstreams: .BIT (binary, from XACT) and .RBT (text, from XACT).
 
 Both carry the same data: a 40-bit header (8 ones, 0010, 24-bit length, 1111), then 160 frames

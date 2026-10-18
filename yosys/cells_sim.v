@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Sebastian Wittlich
 // Primitives of the XC2064 model (simulation models; yosys reads them with -lib as blackboxes).
 // Prefix XC2000_ for the family (like CC_ for GateMate), so that they cannot be confused with cells of other
 // libraries.

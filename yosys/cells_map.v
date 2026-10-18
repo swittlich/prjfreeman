@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Sebastian Wittlich
 // Techmap from yosys-internal cells to the primitives of the XC2064 model.
 
 // $lut (from "abc -lut 3:4") -> XC2000_LUT3 (F or G) or XC2000_LUT4 (F and G together).

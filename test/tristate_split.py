@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Sebastian Wittlich
 # Prepare tristates for the formal comparison in run.sh (yosys JSON, flat, after "tribuf -logic"):
 #   tristate_split.py <in.json> <out.json> <0|1>
 # - Each tristate driver ($tribuf, $_TBUF_) becomes a multiplexer, "high-impedance" the constant 0 or 1.

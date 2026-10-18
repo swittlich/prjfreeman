@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Sebastian Wittlich
 // State machine: pedestrian traffic light. The cars have green until req (push button) arrives and green has lasted
 // at least T_GREEN clock cycles; then yellow (T_YELLOW), red with green for the pedestrians (T_RED, walk), red-yellow
 // (T_YELLOW) and green again. A shared counter times the phases, waiting remembers the request. Synchronous reset rst.
