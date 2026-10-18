@@ -1,29 +1,29 @@
-"""Konfiguration der Logikblöcke (CLB), der IOBs und der übrigen Optionen: Bits <-> Felder.
+"""Configuration of the logic blocks (CLB), the IOBs and the remaining options: bits <-> fields.
 
-CLB (37 Bits je CLB, Namen aus XC2064-def.txt, Bedeutung nach Shirriffs clb.js, mit TEST1.LCA geprüft).
-Felder wie in XACTs LCA-Datei (Config), dazu BASE und die Tabellen, im Textformat als
+CLB (37 bits per CLB, names from XC2064-def.txt, meaning according to Shirriff's clb.js, checked with TEST1.LCA).
+Fields as in XACT's LCA file (Config), plus BASE and the tables, in the text format as
 
     clb AB BASE:FG F:A:B:C G:A:C:Q LUTF:96 LUTG:E8 X:F Y:G Q:FF SET:A RES:D CLK:K:NOT
 
-  BASE   FG (F und G getrennt, Bit BASE FG), F (F und G als eine Funktion von 4 Variablen, B wählt: B = 1
-         Tabelle F, B = 0 Tabelle G; beide Eingangs-Muxe gleich) oder FGM (Bit nicht gesetzt, Muxe verschieden)
-  F, G   die Eingänge der Funktionsgeneratoren: 1 aus A/B, 2 aus B/C, 3 aus C/D/Q (Mux-Bits, nicht wie bei
-         XACT nur die benutzten)
-  LUTF/G Wahrheitstabelle, Bit i = Ausgang für Eingang 1 = i & 1, Eingang 2 = (i >> 1) & 1, Eingang 3 = i >> 2
-  X, Y   Q, F oder G (UNDEF: beide Bits gesetzt)
-  Q      FF oder LATCH (unbenutzte CLBs: LATCH, wie XACT)
-  SET    A, F oder leer (BOTH?: beide Bits); RES D, G oder leer (G?: nur Bit D/G)
-  CLK    K, C oder G, jeweils mit :NOT, leer (Takt aus) bzw. NOT. Kodierung (aus TEST1.LCA, Shirriffs
-         Dekoder verwechselt hier K und G): Bit "CLB AB" wählt C; sonst gilt K, wenn der K-Mux eine Quelle hat,
-         und G, wenn nicht, wobei G gegenüber K invertiert ankommt; ein Latch kehrt das Bit CLK Invert um.
+  BASE   FG (F and G separate, bit BASE FG), F (F and G as one function of 4 variables, B selects: B = 1
+         table F, B = 0 table G; both input muxes equal) or FGM (bit not set, muxes different)
+  F, G   the inputs of the function generators: 1 from A/B, 2 from B/C, 3 from C/D/Q (the mux bits, not just
+         the used ones as in XACT)
+  LUTF/G truth table, bit i = output for input 1 = i & 1, input 2 = (i >> 1) & 1, input 3 = i >> 2
+  X, Y   Q, F or G (UNDEF: both bits set)
+  Q      FF or LATCH (unused CLBs: LATCH, like XACT)
+  SET    A, F or empty (BOTH?: both bits); RES D, G or empty (G?: only bit D/G)
+  CLK    K, C or G, each with or without :NOT, or empty or NOT (clock off). Encoding (from TEST1.LCA, Shirriff's
+         decoder mixes up K and G here): bit "CLB AB" selects C; otherwise K applies if the K mux has a source,
+         and G if not, where G arrives inverted relative to K; a latch reverses the bit CLK Invert.
 
-IOB (je Pad): "iob P8 I:Q" mit I = PAD (Bit I PAD/Latched gesetzt) oder Q (gelatcht: das FF im Eingang, Takt
-von der Leitung der Chipseite). Die O-, T- und K-Muxe stehen als "mux Pnn.O/T/K" (config.py, K nur an P9,
-P59, P27, P24: der Takt-Mux der Seite).
+IOB (per pad): "iob P8 I:Q" with I = PAD (bit I PAD/Latched set) or Q (latched: the FF in the input, clock
+from the line on that side of the chip). The O, T and K muxes appear as "mux Pnn.O/T/K" (config.py, K only at
+P9, P59, P27, P24: the clock mux of the side).
 
-Optionen: "other <Name>: 0|1" für die 8 Bits "Other" (DONE-Pull-up, Readback, TTL/CMOS, unbekannte).
+Options: "other <name>: 0|1" for the 8 "Other" bits (DONE pull-up, readback, TTL/CMOS, unknown ones).
 
-Grundzustand (DEFAULTS): was XACT für unbenutzte Blöcke setzt, in allen zehn XACT-Bitstreams gleich.
+Default state (DEFAULTS): what XACT sets for unused blocks, identical in all ten XACT bitstreams.
 """
 import re
 
@@ -31,14 +31,14 @@ from . import bitmap
 
 LUT_NAMES = {"F": 1, "G": 2}
 CLB_FIELDS = ("BASE", "F", "G", "LUTF", "LUTG", "X", "Y", "Q", "SET", "RES", "CLK")
-OTHER_DEFAULT = {  # programmiert in allen XACT-Bitstreams
+OTHER_DEFAULT = {  # programmed in all XACT bitstreams
     "DONE pin Pullup/No Pullup": 1, "UNknown 2": 1,
     "Single/Unlimited FPGA readback if readback enabled": 1, "FPGA readback Enabled/Disable": 1,
 }
 
 
 class Blocks:
-    """Bitnummern der Felder je CLB und IOB aus der Bitkarte"""
+    """Bit numbers of the fields per CLB and IOB from the bit map"""
 
     def __init__(self, entries=None):
         self.entries = entries or bitmap.load()
@@ -64,12 +64,12 @@ class Blocks:
 
 
 def _p(raw, i):
-    """programmiert? (Bit 0 im Bitstream)"""
+    """programmed? (bit 0 in the bitstream)"""
     return 1 - raw[i]
 
 
 def decode_clb(bl, raw, t, k_used):
-    """Felder einer CLB; k_used: hat der K-Mux eine Quelle (entscheidet zwischen K und G)"""
+    """Fields of a CLB; k_used: does the K mux have a source (decides between K and G)"""
     p = lambda name: _p(raw, bl.bit("CLB %s%s" % (t, name)))  # noqa: E731
     f = {}
     for lut, n in LUT_NAMES.items():
@@ -86,7 +86,7 @@ def decode_clb(bl, raw, t, k_used):
     f["RES"] = ["", "G?", "D", "G"][p(" Reset-Enable") * 2 + p(" Reset D/G")]
     en, sel, inv = p(" CLK enable"), p(""), p(" CLK Invert")
     eff = inv ^ latch
-    if not en:  # Takt aus: "", "NOT", "OFF:C", "OFF:C:NOT" (die übrigen Bits so, wie sie stehen)
+    if not en:  # clock off: "", "NOT", "OFF:C", "OFF:C:NOT" (the remaining bits as they are)
         f["CLK"] = ":".join((["OFF", "C"] if sel else []) + (["NOT"] if inv else []))
     elif sel:
         f["CLK"] = "C" + (":NOT" if eff else "")
@@ -98,14 +98,14 @@ def decode_clb(bl, raw, t, k_used):
 
 
 def encode_clb(bl, t, f):
-    """Felder -> {Bitnummer: programmiert (0/1)} für alle 37 Bits der CLB"""
+    """Fields -> {bit number: programmed (0/1)} for all 37 bits of the CLB"""
     out = {}
 
     def put(name, v):
         out[bl.bit("CLB %s%s" % (t, name))] = int(v)
 
     if f["BASE"] == "F" and f["F"] != f["G"]:
-        raise ValueError("CLB %s: BASE F verlangt gleiche Eingänge F und G (%s, %s)" % (t, f["F"], f["G"]))
+        raise ValueError("CLB %s: BASE F requires identical inputs F and G (%s, %s)" % (t, f["F"], f["G"]))
     for lut, n in LUT_NAMES.items():
         lt = " Logic Table: %d " % n
         table = int(f["LUT" + lut], 16)
@@ -130,7 +130,7 @@ def encode_clb(bl, t, f):
     put(" Reset-Enable", r >> 1), put(" Reset D/G", r & 1)
     parts = f["CLK"].split(":") if f["CLK"] else []
     inv = "NOT" in parts
-    if not parts or parts[0] in ("NOT", "OFF"):  # Takt aus
+    if not parts or parts[0] in ("NOT", "OFF"):  # clock off
         en, sel, ibit = 0, "C" in parts, inv
     elif parts[0] in ("C", "K"):
         en, sel, ibit = 1, parts[0] == "C", inv ^ latch
@@ -151,7 +151,7 @@ def format_fields(f):
 
 
 def parse_fields(text):
-    """'BASE:FG F:A:B:C ... CLK:K:NOT' -> dict (Werte dürfen ':' enthalten)"""
+    """'BASE:FG F:A:B:C ... CLK:K:NOT' -> dict (values may contain ':')"""
     f = {}
     for tok in text.split():
         k, _, v = tok.partition(":")
@@ -165,7 +165,7 @@ def decode_iob(bl, raw, pin):
 
 def encode_iob(bl, pin, f):
     if set(f) - {"I"}:
-        raise ValueError("IOB %s: unbekannte Felder %s (Takt-Mux jetzt als mux %s.K)" % (pin, sorted(set(f) - {"I"}), pin))
+        raise ValueError("IOB %s: unknown fields %s (clock mux is now mux %s.K)" % (pin, sorted(set(f) - {"I"}), pin))
     return {bl.bit("IOB %s.I PAD/Latched" % pin): int(f.get("I", "PAD") == "PAD")}
 
 
@@ -175,5 +175,5 @@ DEFAULT_IOB = {"I": "PAD"}
 
 
 def lut_inputs(f, lut):
-    """Eingänge eines Funktionsgenerators als Liste ['A', 'B', 'Q']"""
+    """Inputs of a function generator as a list ['A', 'B', 'Q']"""
     return f[lut].split(":")

@@ -1,12 +1,12 @@
-# nextpnr --post-route: Netzliste allein aus den belegten Bels und den benutzten Pips zurückgewinnen,
-# also aus dem, was ein Bitstream festhält. Von jedem Bel-Ausgang aus folgt das Skript den benutzten
-# Pips bis zu den Bel-Eingängen, die es erreicht. Namen (Netze, Ports) und Zellparameter kommen aus der
-# Netzliste, die Verbindungen nur aus dem Routing.
+# nextpnr --post-route: recover the netlist solely from the occupied Bels and the used Pips,
+# i.e. from what a bitstream records. From every Bel output the script follows the used
+# Pips to the Bel inputs it reaches. Names (nets, ports) and cell parameters come from the
+# netlist, the connections only from the routing.
 #
-# Prüft: jeder Eingang hat höchstens einen Treiber, jeder erreichte Eingang gehört zum Netz seines
-# Treibers in der Netzliste und umgekehrt, und jeder benutzte Pip liegt auf einem solchen Weg.
-# Schreibt die Netzliste als Verilog nach $XC2064_EXTRACT (für den Äquivalenzvergleich in run.sh)
-# und eine Zeile "XC2064_EXTRACT: ..." ins Log.
+# Checks: every input has at most one driver, every reached input belongs to the net of its
+# driver in the netlist and vice versa, and every used Pip lies on such a path.
+# Writes the netlist as Verilog to $XC2064_EXTRACT (for the equivalence check in run.sh)
+# and a line "XC2064_EXTRACT: ..." to the log.
 import os
 import re
 import sys
@@ -22,14 +22,14 @@ cells = {name: c for name, c in ctx.cells}
 ports_of = {name: {k: p for k, p in c.ports} for name, c in cells.items()}
 cell_at = {c.bel: c for c in cells.values() if c.bel}
 is_out = lambda p: str(p.type).endswith("PORT_OUT")
-# IO-Puffer: Richtung des Top-Level-Ports an PAD. PAD hängt am Pin, nicht am Routing.
+# IO buffers: direction of the top-level port at PAD. PAD is attached to the pin, not to the routing.
 IO_DIR = {"XC2000_INBUF": "input", "XC2000_INFF": "input", "XC2000_OUTBUF": "output", "XC2000_TOBUF": "output",
           "XC2000_IOBUF": "inout"}
 is_pad = lambda c, port: port == "PAD" and c.type in IO_DIR
 
 
 def reach(wire):
-    """Drähte, die von wire aus über benutzte Pips erreichbar sind, und die Pips dorthin"""
+    """Wires reachable from wire over used Pips, and the Pips leading there"""
     seen, pips, todo = {wire}, set(), [wire]
     while todo:
         w = todo.pop()
@@ -44,7 +44,7 @@ def reach(wire):
     return seen, pips
 
 
-# Treiber (Zelle, Port) je Eingang (Zelle, Port), nur aus dem Routing
+# Driver (cell, port) per input (cell, port), from the routing only
 driver_of = {}
 reached_pips = set()
 for c in cells.values():
@@ -63,10 +63,10 @@ for c in cells.values():
                     continue
                 key = (sink.name, bp.pin)
                 if key in driver_of and driver_of[key] != (c.name, port):
-                    errors.append("%s.%s: zwei Treiber, %s.%s und %s.%s" % (key + driver_of[key] + (c.name, port)))
+                    errors.append("%s.%s: two drivers, %s.%s and %s.%s" % (key + driver_of[key] + (c.name, port)))
                 driver_of[key] = (c.name, port)
 
-# Vergleich mit der Netzliste
+# Comparison with the netlist
 for c in cells.values():
     for port, pi in c.ports:
         if is_out(pi) or is_pad(c, port):
@@ -75,16 +75,16 @@ for c in cells.values():
         want = (pi.net.driver.cell.name, pi.net.driver.port) if pi.net and pi.net.driver.cell else None
         got = driver_of.get(key)
         if got != want:
-            errors.append("%s.%s: Routing verbindet %s, Netzliste %s" % (c.name, port, got, want))
+            errors.append("%s.%s: routing connects %s, netlist %s" % (c.name, port, got, want))
 for key in driver_of:
     pi = ports_of[key[0]].get(key[1])
     if pi is None:
-        errors.append("%s.%s: im Routing getrieben, aber kein Port der Zelle" % key)
+        errors.append("%s.%s: driven in the routing, but not a port of the cell" % key)
 
 bound_pips = [p for p in ctx.getPips() if ctx.getBoundPipNet(p) is not None]
 for pip in bound_pips:
     if pip not in reached_pips:
-        errors.append("Pip %s (Netz %s) liegt auf keinem Weg von einem Bel-Ausgang"
+        errors.append("Pip %s (net %s) is not on any path from a Bel output"
                       % (pip, ctx.getBoundPipNet(pip).name))
 
 # --- Verilog ------------------------------------------------------------------------------------
@@ -102,7 +102,7 @@ def param(v):
     return "%d'b%s" % (len(s), s) if re.fullmatch(r"[01xz]+", s) else '"%s"' % s
 
 
-top_ports = {}  # Port-Name -> Richtung, aus den PAD-Netzen der IO-Puffer
+top_ports = {}  # port name -> direction, from the PAD nets of the IO buffers
 for c in cells.values():
     if c.type in IO_DIR:
         top_ports[ports_of[c.name]["PAD"].net.name] = IO_DIR[c.type]
@@ -132,7 +132,7 @@ for c in sorted(cells.values(), key=lambda c: c.name):
             n = net_name(driver_of[(c.name, port)])
             wires.add(n)
             conns[port] = esc(n)
-    # Busse (I[0], I[1], ...) wieder zusammenfassen, offene Bits als eigene, ungetriebene Drähte
+    # Reassemble buses (I[0], I[1], ...), unconnected bits as separate undriven wires
     buses = {}
     for port in list(conns):
         m = vec.match(port)
@@ -152,7 +152,7 @@ for c in sorted(cells.values(), key=lambda c: c.name):
                                       ", ".join(".%s(%s)" % (k, v) for k, v in sorted(conns.items()))))
 
 with open(out_file, "w") as f:
-    f.write("// aus Bels und benutzten Pips zurückgewonnen (arch/xc2064/test/extract_netlist.py)\n")
+    f.write("// recovered from Bels and used Pips (arch/xc2064/test/extract_netlist.py)\n")
     f.write("module top (%s);\n" % ", ".join(esc(b) for b in sorted(groups)))
     for base, (d, idx) in sorted(groups.items()):
         rng = "[%d:%d] " % (max(idx), min(idx)) if idx[0] is not None else ""
@@ -162,6 +162,6 @@ with open(out_file, "w") as f:
     f.write("\n".join(lines) + "\nendmodule\n")
 
 for e in errors[:20]:
-    print("XC2064_EXTRACT Fehler: " + e)
-print("XC2064_EXTRACT: %d Eingänge verbunden, %d Pips, %d Fehler" % (len(driver_of), len(bound_pips), len(errors)))
+    print("XC2064_EXTRACT error: " + e)
+print("XC2064_EXTRACT: %d inputs connected, %d pips, %d errors" % (len(driver_of), len(bound_pips), len(errors)))
 sys.stdout.flush()

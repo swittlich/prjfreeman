@@ -1,11 +1,11 @@
-# Tristate für den formalen Vergleich in run.sh aufbereiten (yosys-JSON, flach, nach "tribuf -logic"):
-#   tristate_split.py <ein.json> <aus.json> <0|1>
-# - Jeder Tristate-Treiber ($tribuf, $_TBUF_) wird ein Multiplexer, "hochohmig" die feste 0 bzw. 1.
-#   Sind zwei Netzlisten mit 0 und mit 1 äquivalent, sind sie es auch mit Z: Treibt die eine, wo die
-#   andere hochohmig ist, unterscheiden sie sich in einem der beiden Läufe.
-# - Jeder inout-Port P wird ein Ausgang, und was P liest, liest stattdessen den neuen Eingang P$ext
-#   (der Wert, den die Außenwelt anlegt). So prüft der Vergleich auch den Lesepfad.
-# Behält nur das Top-Modul. Gibt die Zahl der Tristate-Treiber und inout-Ports aus.
+# Prepare tristates for the formal comparison in run.sh (yosys JSON, flat, after "tribuf -logic"):
+#   tristate_split.py <in.json> <out.json> <0|1>
+# - Each tristate driver ($tribuf, $_TBUF_) becomes a multiplexer, "high-impedance" the constant 0 or 1.
+#   If two netlists are equivalent with 0 and with 1, they are also equivalent with Z: if one drives where the
+#   other is high-impedance, they differ in one of the two runs.
+# - Each inout port P becomes an output, and whatever reads P reads the new input P$ext instead
+#   (the value the outside world applies). That way the comparison also checks the read path.
+# Keeps only the top module. Prints the number of tristate drivers and inout ports.
 import json
 import sys
 

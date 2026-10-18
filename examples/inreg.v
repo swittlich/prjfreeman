@@ -1,7 +1,7 @@
-// Eingänge über das FF im IOB (gelatchter Eingang, XACT: I:Q): d wird mit clk in die IOBs übernommen, dahinter
-// eine zweite Stufe in den CLBs und ein Flankendetektor. Alle IOBs einer Chipseite teilen sich einen Takt; mit
-// inreg.pcf liegt d[1:0] oben und d[3:2] links, clk kommt also über zwei K-Muxe.
-// erwartet: XC2000_INFF 4
+// Inputs through the FF in the IOB (latched input, XACT: I:Q): d is clocked into the IOBs by clk, followed by
+// a second stage in the CLBs and an edge detector. All IOBs on one side of the chip share a clock; with
+// inreg.pcf, d[1:0] is at the top and d[3:2] on the left, so clk arrives through two K muxes.
+// expected: XC2000_INFF 4
 module inreg (
 	input        clk,
 	input  [3:0] d,
@@ -10,8 +10,8 @@ module inreg (
 );
 	reg [3:0] s1, s2;
 	always @(posedge clk) begin
-		s1 <= d;  // im IOB
-		s2 <= s1; // in den CLBs
+		s1 <= d;  // in the IOB
+		s2 <= s1; // in the CLBs
 	end
 	assign q = s2;
 	assign rise = s1 & ~s2;

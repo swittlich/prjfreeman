@@ -1,13 +1,13 @@
-"""CLB-Eingänge A, B, C, D und K: die Quellen jedes Eingangs-Mux und welcher Mux-Code welche Quelle wählt,
-nachgebildet aus Shirriffs clb.js (generateClbPips, processClbPip).
+"""CLB inputs A, B, C, D and K: the sources of each input mux and which mux code selects which source,
+modelled on Shirriff's clb.js (generateClbPips, processClbPip).
 
-Eine Quelle ist eine Kreuzung zweier Leitungen: der Eingangsleitung der CLB (A und D senkrecht, B, C und K
-waagerecht) mit der Leitung, von der das Signal kommt (line). Der Code ist der Rohwert der Mux-Bits mit
-Bit n = 2^n (wie in clb.js), ein Code ohne Quelle ist "nicht verbunden" (nur bei K).
+A source is a crossing of two lines: the input line of the CLB (A and D vertical, B, C and K
+horizontal) with the line the signal comes from (line). The code is the raw value of the mux bits with
+bit n = 2^n (as in clb.js); a code without a source is "not connected" (only for K).
 
-clb.js schreibt die Platzhalter so: "=" ist die Zeile bzw. Spalte der Kachel, "==" die Kachel, "-=" und
-"+=" die Kachel darüber bzw. darunter, "=-" und "=+" (nur für Namen) links und rechts. Wie in JavaScript
-ersetzt replace() jeweils nur das erste Vorkommen.
+clb.js writes the placeholders as follows: "=" is the row or column of the tile, "==" the tile, "-=" and
+"+=" the tile above or below, "=-" and "=+" (only for names) left and right. As in JavaScript,
+replace() replaces only the first occurrence each time.
 """
 import collections
 
@@ -17,9 +17,9 @@ Source = collections.namedtuple("Source", "index line col row g name")
 class Mux:
     def __init__(self, tile, pin, sources, codes):
         self.tile, self.pin = tile, pin
-        self.sources = sources  # Liste von Source, Index = Position in clb.js
-        self.codes = codes  # Code -> Index in sources oder None (nicht verbunden)
-        self.bits = {}  # n -> Bitnummer, aus der Bitkarte
+        self.sources = sources  # list of Source, index = position in clb.js
+        self.codes = codes  # code -> index in sources or None (not connected)
+        self.bits = {}  # n -> bit number, from the bit map
 
     @property
     def name(self):
@@ -29,7 +29,7 @@ class Mux:
         return sum(raw[b] << n for n, b in self.bits.items())
 
     def decode(self, raw):
-        """(Code, Source oder None); KeyError bei unbekanntem Code"""
+        """(code, Source or None); KeyError for an unknown code"""
         c = self.code(raw)
         i = self.codes[c]
         return c, (None if i is None else self.sources[i])
@@ -46,7 +46,7 @@ def _expand(spec, tile):
     elif parts[0].startswith("row") or parts[1].startswith("col"):
         row, col = parts[0], parts[1]
     else:
-        raise ValueError("clb.js: unerwarteter Pip %s" % spec)
+        raise ValueError("clb.js: unexpected pip %s" % spec)
     row = row.replace("=", r, 1).replace("+", next_r, 1)
     col = col.replace("=", c, 1).replace("+", next_c, 1)
     name = parts[2] + ":" + parts[3] if len(parts) == 4 else col + ":" + row
@@ -54,7 +54,7 @@ def _expand(spec, tile):
 
 
 def _specs(tile):
-    """Quellen (clb.js-Schreibweise) und Codes je Eingang, Fallunterscheidung wie in generateClbPips"""
+    """Sources (clb.js notation) and codes per input, case distinction as in generateClbPips"""
     r, c = tile
     s = {}
     if r == "A":
@@ -70,7 +70,7 @@ def _specs(tile):
                   {3: 0, 15: 1, 4: 2, 2: 3, 14: 4, 5: 5})
 
     if c == "A":
-        pad = {"A": 58, "B": 56, "C": 54, "D": 52, "E": 51, "F": 49, "G": 47, "H": 46}[c]  # wie clb.js: immer 58
+        pad = {"A": 58, "B": 56, "C": 54, "D": 52, "E": 51, "F": 49, "G": 47, "H": 46}[c]  # as in clb.js: always 58
         b = ["col.=.long.2:==.B", "col.=.local.1:==.B", "col.=.local.2:==.B", "col.=.local.3:==.B",
              "col.=.local.4:==.B", "col.=.long.3:==.B", "col.=.long.4:==.B", "col.=.clk:==.B:CLK.AA.O:==.B",
              "col.=.io3:==.B:PAD%d.I:==.B" % pad,
@@ -107,7 +107,7 @@ def _specs(tile):
     s["C"] = (cc, cmux)
 
     k = ["col.=.long.4:==.K" if c == "A" else "col.=.long.2:==.K", "col.=.clk:==.K:CLK.AA.O:==.K"]
-    s["K"] = (k, {2: 0, 1: 1, 3: None})  # 3: nicht verbunden
+    s["K"] = (k, {2: 0, 1: 1, 3: None})  # 3: not connected
 
     if r == "H":
         pad = {"A": 45, "B": 43, "C": 41, "D": 39, "E": 37, "F": 35, "G": 33, "H": 31}[c]
@@ -122,7 +122,7 @@ def _specs(tile):
 
 
 def muxes(lines, entries):
-    """Name 'AB.A' -> Mux für alle 64 CLBs und die Eingänge A, B, C, D, K"""
+    """Name 'AB.A' -> Mux for all 64 CLBs and the inputs A, B, C, D, K"""
     result = {}
     for r in "ABCDEFGH":
         for c in "ABCDEFGH":
@@ -143,8 +143,8 @@ def muxes(lines, entries):
     for m in result.values():
         width = max(m.bits) + 1
         if sorted(m.bits) != list(range(width)):
-            raise ValueError("%s: Mux-Bits %s nicht lückenlos" % (m.name, sorted(m.bits)))
+            raise ValueError("%s: mux bits %s not contiguous" % (m.name, sorted(m.bits)))
         bad = [code for code in m.codes if code >= 1 << width]
         if bad:
-            raise ValueError("%s: Codes %s passen nicht in %d Bits" % (m.name, bad, width))
+            raise ValueError("%s: codes %s do not fit in %d bits" % (m.name, bad, width))
     return result

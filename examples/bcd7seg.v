@@ -1,8 +1,8 @@
-// Vierstelliger BCD-Zähler mit gemultiplexter 7-Segment-Anzeige, ein Design nahe an allen 64 CLBs: ein Vorteiler
-// (PRESCALE Takte) schaltet den Zähler weiter, solange en ist; die Anzeige wechselt mit jedem Takt die Stelle
-// (an, low-aktiv) und zeigt deren Ziffer (seg = gfedcba, low-aktiv), beides registriert. Synchrones Reset rst.
-// PRESCALE 16 belegt 54 CLBs (routet in allen Läufen des Regressionstests schnell), 10 58 CLBs, 50 61 CLBs
-// (dann läuft router2 in einzelnen Läufen in den Timeout, siehe README).
+// Four-digit BCD counter with a multiplexed 7-segment display, a design close to all 64 CLBs: a prescaler
+// (PRESCALE clock cycles) advances the counter while en is high; the display moves to the next digit on every clock
+// cycle (an, active low) and shows its value (seg = gfedcba, active low), both registered. Synchronous reset rst.
+// PRESCALE 16 occupies 54 CLBs (routes quickly in all runs of the regression test), 10 58 CLBs, 50 61 CLBs
+// (then router2 runs into the timeout in some runs, see README).
 module bcd7seg #(
 	parameter PRESCALE = 16
 ) (
@@ -14,8 +14,8 @@ module bcd7seg #(
 );
 	localparam W = $clog2(PRESCALE);
 	reg [W-1:0] pre;
-	reg [3:0]   d0, d1, d2, d3; // Ziffern, d0 die niedrigste
-	reg [1:0]   sel;            // angezeigte Stelle
+	reg [3:0]   d0, d1, d2, d3; // digits, d0 the least significant
+	reg [1:0]   sel;            // digit being displayed
 	wire tick = en && pre == PRESCALE - 1;
 
 	always @(posedge clk)
@@ -38,7 +38,7 @@ module bcd7seg #(
 			end
 		end
 
-	// Anzeige: Stelle sel, Ziffer über den Decoder; ab dem nächsten Takt an den Pins
+	// Display: digit sel, its value through the decoder; at the pins from the next clock cycle on
 	reg [3:0] digit;
 	always @*
 		case (sel)
@@ -60,7 +60,7 @@ module bcd7seg #(
 			4'd7: s = 7'b0000111;
 			4'd8: s = 7'b1111111;
 			4'd9: s = 7'b1101111;
-			default: s = 7'b1000000; // Strich
+			default: s = 7'b1000000; // dash
 		endcase
 	always @(posedge clk) begin
 		sel <= sel + 1'b1;

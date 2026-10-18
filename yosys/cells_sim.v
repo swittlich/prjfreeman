@@ -1,9 +1,9 @@
-// Primitive des XC2064-Modells (Simulationsmodelle; yosys liest sie mit -lib als Blackboxen).
-// Präfix XC2000_ für die Familie (wie CC_ bei GateMate), damit sie sich nicht mit Zellen anderer
-// Bibliotheken verwechseln lassen.
-// Port- und Parameternamen müssen zu den Bel-Pins in nextpnr/xc2064_arch_gen.py passen.
+// Primitives of the XC2064 model (simulation models; yosys reads them with -lib as blackboxes).
+// Prefix XC2000_ for the family (like CC_ for GateMate), so that they cannot be confused with cells of other
+// libraries.
+// Port and parameter names must match the Bel pins in nextpnr/xc2064_arch_gen.py.
 
-// Funktionsgenerator F oder G: Funktion von 3 Variablen
+// Function generator F or G: function of 3 variables
 module XC2000_LUT3 #(
 	parameter [7:0] INIT = 8'h00
 ) (
@@ -13,7 +13,7 @@ module XC2000_LUT3 #(
 	assign O = INIT[I];
 endmodule
 
-// F und G gemeinsam: Funktion von 4 Variablen (I[3] = B wählt zwischen F = INIT[15:8] und G = INIT[7:0])
+// F and G together: function of 4 variables (I[3] = B selects between F = INIT[15:8] and G = INIT[7:0])
 module XC2000_LUT4 #(
 	parameter [15:0] INIT = 16'h0000
 ) (
@@ -23,8 +23,8 @@ module XC2000_LUT4 #(
 	assign O = INIT[I];
 endmodule
 
-// Mux-Modus FGM: F und G mit eigenen Eingängen, S (= B) wählt zwischen F (S = 1) und G (S = 0). Lohnt sich nur
-// mit der Rückführung Q: F liest dann D, G das eigene Q (bzw. umgekehrt), eine Funktion von 5 Variablen.
+// Mux mode FGM: F and G with their own inputs, S (= B) selects between F (S = 1) and G (S = 0). Only worthwhile
+// with the feedback Q: F then reads D, G its own Q (or vice versa), a function of 5 variables.
 module XC2000_FGM #(
 	parameter [7:0] INIT_F = 8'h00,
 	parameter [7:0] INIT_G = 8'h00
@@ -37,9 +37,9 @@ module XC2000_FGM #(
 	assign O = S ? INIT_F[F] : INIT_G[G];
 endmodule
 
-// Das Speicherelement der CLB: Flipflop (LATCH=0) oder Latch (LATCH=1), Takt invertierbar (CLKINV),
-// asynchrones Set S und Reset R (Reset hat Vorrang, angenommen). Nach dem Laden der Konfiguration 0.
-// Im Chip kommt CLK aus K, C oder G, S aus A oder F, R aus D oder G (siehe nextpnr/xc2064.cc).
+// The storage element of the CLB: flip-flop (LATCH=0) or latch (LATCH=1), clock invertible (CLKINV),
+// asynchronous set S and reset R (reset has priority, assumed). 0 after loading the configuration.
+// In the chip CLK comes from K, C or G, S from A or F, R from D or G (see nextpnr/xc2064.cc).
 module XC2000_DFF #(
 	parameter LATCH = 0,
 	parameter CLKINV = 0
@@ -67,9 +67,9 @@ module XC2000_DFF #(
 	endgenerate
 endmodule
 
-// IO-Puffer: alle sitzen auf einem IOB. Zwei Konfigurationszellen schalten den Ausgangstreiber an
-// (XC2000_OUTBUF), ab (XC2000_INBUF) oder unter die Kontrolle von T (XC2000_TOBUF, XC2000_IOBUF).
-// T = 1 schaltet den Treiber ab, der Pin ist dann hochohmig (Datenblatt, Abschnitt I/O Block).
+// IO buffers: all of them sit on an IOB. Two configuration cells switch the output driver on
+// (XC2000_OUTBUF), off (XC2000_INBUF) or under the control of T (XC2000_TOBUF, XC2000_IOBUF).
+// T = 1 switches the driver off, the pin is then high-impedance (datasheet, section I/O Block).
 module XC2000_INBUF (
 	input  PAD,
 	output O
@@ -77,10 +77,10 @@ module XC2000_INBUF (
 	assign O = PAD;
 endmodule
 
-// Gelatchter Eingang (XACT: I:Q, Data Book: "registered input"): ein flankengesteuertes D-FF zwischen Pad und
-// Eingang, Takt K mit steigender Flanke (Data Book S. 2-214: Setup und Hold an der steigenden Flanke von L).
-// K kommt von der Taktleitung der Chipseite, alle IOBs einer Seite teilen sie. Gelöscht beim Konfigurieren
-// (und durch RESET, nicht nachgebildet), kein Set/Reset, keine Taktumkehr.
+// Latched input (XACT: I:Q, Data Book: "registered input"): an edge-triggered D FF between pad and
+// input, clock K with rising edge (Data Book p. 2-214: setup and hold at the rising edge of L).
+// K comes from the clock line of the chip side, all IOBs of one side share it. Cleared during configuration
+// (and by RESET, not modelled), no set/reset, no clock inversion.
 module XC2000_INFF (
 	input      PAD,
 	input      K,

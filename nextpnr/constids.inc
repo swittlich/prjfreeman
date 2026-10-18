@@ -1,4 +1,4 @@
-// Zelltypen (Primitive aus yosys)
+// Cell types (primitives from yosys)
 X(XC2000_LUT3)
 X(XC2000_LUT4)
 X(XC2000_FGM)
@@ -9,7 +9,7 @@ X(XC2000_OUTBUF)
 X(XC2000_TOBUF)
 X(XC2000_IOBUF)
 
-// Bel-Typen
+// Bel types
 X(LUT3)
 X(LUT4)
 X(FGM)
@@ -26,7 +26,7 @@ X(S)
 X(R)
 X(Q)
 X(K)
-// Zelltypen der Konstanten aus dem JSON-Frontend (pack() faltet sie)
+// Cell types of the constants from the JSON frontend (pack() folds them)
 X(GND)
 X(VCC)
 X(INIT)

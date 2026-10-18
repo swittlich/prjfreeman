@@ -1,31 +1,31 @@
 #!/usr/bin/env bash
-# Regressionstest für xc2064: Synthese, Place & Route über mehrere Seeds (mit und ohne PCF) und ein
-# formaler Vergleich jedes Ergebnisses mit dem RTL.
-#   test/run.sh [design.v ...]          ohne Argument alle examples/*.v
-# Zeilen "// erwartet: <Zelltyp> <Anzahl>" im Design prüfen die Synthese (etwa XC2000_FGM in shiftreg.v).
-# Spalten je Lauf:
-#   PnR    nextpnr endet ohne Fehler innerhalb von TIMEOUT Sekunden (router2 hat kein Abbruchlimit)
-#   Netz   die Netzliste nach dem Routing (*.pnr.json, also nach pack()) ist äquivalent zum RTL, mit
-#          Tristate auch im hochohmigen Zustand und auf dem Lesepfad von inout (tristate_split.py)
-#   Pips   die nur aus Bels und benutzten Pips zurückgewonnene Netzliste (extract_netlist.py) ist stimmig
-#          und äquivalent zum RTL. Das deckt Platzierung und Routing mit ab
-#   Bitstream  Rundlauf über den Bitstream: nextpnr schreibt die Konfiguration als Text (--vopt out=),
-#          xc2064pack macht daraus eine RBT-Datei, xc2064unpack und xc2064pack geben sie bitgenau wieder,
-#          und die allein aus dem Bitstream zurückgewonnene Netzliste (xc2064netlist) ist äquivalent zum RTL
-#   Shirriff  unabhängige Gegenprobe: Shirriffs Decoder (xc2064shirriff, JavaScript in QuickJS) liest die
-#          RBT-Datei selbst und dekodiert CLBs, Muxe, IOBs, Pips und Switch-Matrizen wie das Paket
-#          (- ohne das Python-Paket quickjs)
-#   LCA    xc2064lca schreibt die Konfiguration als LCA für MAKEBITS, deren Blöcke und Netze zum Bitstream
-#          passen (check_xact.py; MAKEBITS selbst läuft nur in DOSBox, außerhalb des Tests)
-#   Fmax   kleinste Frequenz aller Takte nach dem Routing, mit FMIN=… (MHz) ist ein Wert darunter ein Fehler
-#   Routing  Iterationen und Laufzeit von router2 (nur Information)
-# Dazu je Design ein Lauf ohne PCF in jedem weiteren Gehäuse (Spalte PCF: PD48, PC44, PG68) und je ein Lauf
-# mit und ohne PCF ohne die Taktpuffer (--vopt noclkbuf, Spalte Seed: noclkbuf). Bitstream verlangt
-# zusätzlich, dass die Konfiguration einen Taktpuffer benutzt, bei noclkbuf keinen.
-# Danach je Design die XNF-Netzliste für XACT (xc2064xnf) aus Gattern, mit --lut und mit --iobff, geprüft
-# mit check_xact.py (Aufbau, Treiber, Pads, Speicherelemente und Pads wie bei synth_xc2064, LOC aus der PCF).
-# Umgebungsvariablen: SEEDS="1 2 3 4 5 6" (zusätzlich zum nextpnr-Standard), PACKAGES="PD48 PC44 PG68",
-# FREQ=5, FMIN=…, TIMEOUT=300, YOSYS=…, NEXTPNR=…, TEST_JOBS (parallele Läufe, Standard JOBS, höchstens 10)
+# Regression test for xc2064: synthesis, place & route over several seeds (with and without PCF) and a
+# formal comparison of every result with the RTL.
+#   test/run.sh [design.v ...]          without arguments all examples/*.v
+# Lines "// expected: <cell type> <count>" in the design check the synthesis (e.g. XC2000_FGM in shiftreg.v).
+# Columns per run:
+#   PnR    nextpnr finishes without errors within TIMEOUT seconds (router2 has no abort limit)
+#   Net    the netlist after routing (*.pnr.json, i.e. after pack()) is equivalent to the RTL, with
+#          tristate also in the high-impedance state and on the read path of inout (tristate_split.py)
+#   Pips   the netlist recovered solely from Bels and used Pips (extract_netlist.py) is consistent
+#          and equivalent to the RTL. This also covers placement and routing
+#   Bitstream  round trip through the bitstream: nextpnr writes the configuration as text (--vopt out=),
+#          xc2064pack turns it into an RBT file, xc2064unpack and xc2064pack reproduce it bit-exactly,
+#          and the netlist recovered from the bitstream alone (xc2064netlist) is equivalent to the RTL
+#   Shirriff  independent cross-check: Shirriff's decoder (xc2064shirriff, JavaScript in QuickJS) reads the
+#          RBT file itself and decodes CLBs, muxes, IOBs, Pips and switch matrices like the package
+#          (- without the Python package quickjs)
+#   LCA    xc2064lca writes the configuration as an LCA for MAKEBITS whose blocks and nets match the bitstream
+#          (check_xact.py; MAKEBITS itself runs only in DOSBox, outside the test)
+#   Fmax   lowest frequency of all clocks after routing; with FMIN=… (MHz) a value below it is an error
+#   Routing  iterations and run time of router2 (information only)
+# In addition, per design one run without PCF in every other package (column PCF: PD48, PC44, PG68) and one run
+# each with and without PCF without the clock buffers (--vopt noclkbuf, column Seed: noclkbuf). Bitstream also
+# requires that the configuration uses a clock buffer, and none with noclkbuf.
+# Then per design the XNF netlist for XACT (xc2064xnf) from gates, with --lut and with --iobff, checked
+# with check_xact.py (structure, drivers, pads, storage elements and pads as in synth_xc2064, LOC from the PCF).
+# Environment variables: SEEDS="1 2 3 4 5 6" (in addition to the nextpnr default), PACKAGES="PD48 PC44 PG68",
+# FREQ=5, FMIN=…, TIMEOUT=300, YOSYS=…, NEXTPNR=…, TEST_JOBS (parallel runs, default JOBS, at most 10)
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARCH="$(dirname "$HERE")"
 source "$ARCH/../../scripts/lib.sh"
@@ -39,10 +39,10 @@ OUT="$FAT_BUILD/flows/xc2064/test"
 designs=("$@")
 [[ ${#designs[@]} -eq 0 ]] && designs=("$ARCH"/examples/*.v)
 
-# Formaler Vergleich in drei Schritten, alle Netzlisten flach als yosys-JSON:
-# gold_json <RTL> <aus.json>: das RTL, Tristate wie in synth_xc2064 (tribuf -logic, deminout)
+# Formal comparison in three steps, all netlists flat as yosys JSON:
+# gold_json <RTL> <out.json>: the RTL, tristate as in synth_xc2064 (tribuf -logic, deminout)
 gold_json() {
-	# proc -norom: große case-Anweisungen (7-Segment-Decoder) bleiben Logik, ein ROM kann equiv nicht rechnen
+	# proc -norom: large case statements (7-segment decoder) stay logic; equiv cannot compute with a ROM
 	"$YOSYS" -q -l "${2%.json}.log" -p "
 		read_verilog $1
 		proc -norom
@@ -53,7 +53,7 @@ gold_json() {
 		opt_clean
 		write_json $2" >/dev/null 2>&1
 }
-# gate_json <yosys-Befehl zum Lesen der Netzliste> <aus.json>: mit den Modellen der Primitive
+# gate_json <yosys command to read the netlist> <out.json>: with the models of the primitives
 gate_json() {
 	"$YOSYS" -q -l "${2%.json}.log" -p "
 		$1
@@ -65,10 +65,10 @@ gate_json() {
 		opt_clean
 		write_json $2" >/dev/null 2>&1
 }
-# equiv <gold.json> <gate.json>: Induktion über die gleichnamigen Register, Takte über clk2fflogic mit
-# ihrer Flanke. Mit Tristate zweimal, hochohmig als 0 und als 1, inout-Ports aufgetrennt
+# equiv <gold.json> <gate.json>: induction over the registers of the same name, clocks via clk2fflogic with
+# their edge. With tristate twice, high-impedance as 0 and as 1, inout ports split
 # (tristate_split.py).
-# gold_split <gold.json>: die beiden Fassungen des RTL einmal je Design (die Läufe laufen parallel)
+# gold_split <gold.json>: the two variants of the RTL, once per design (the runs execute in parallel)
 gold_split() {
 	local z n
 	for z in 0 1; do
@@ -98,11 +98,11 @@ equiv() {
 			equiv_simple -seq 5
 			equiv_induct -seq 5
 			equiv_status -assert" >/dev/null 2>&1 || return 1
-		[[ $n -gt 0 ]] || break # ohne Tristate reicht ein Lauf
+		[[ $n -gt 0 ]] || break # without tristate one run is enough
 	done
 }
 
-# kleinste "Max frequency" je Takt aus dem letzten Bericht im Log
+# lowest "Max frequency" per clock from the last report in the log
 fmax() {
 	awk -v q="'" '/Max frequency for clock/ { split($0, a, q); v = a[3]; sub(/^: /, "", v); sub(/ MHz.*/, "", v); last[a[2]] = v }
 		END { for (c in last) if (m == "" || last[c] + 0 < m + 0) m = last[c]; print m }' "$1"
@@ -112,15 +112,15 @@ make -s -C "$ARCH/yosys"
 mkdir -p "$OUT"
 runs=0
 failed=0
-row() { printf '%-10s %-5s %-8s %-8s %-6s %-6s %-10s %-9s %-6s %-11s %s\n' "$@"; }
-# Shirriffs Decoder braucht das Python-Paket quickjs; ohne es bleibt die Spalte leer (-)
+row() { printf '%-10s %-7s %-8s %-8s %-6s %-6s %-10s %-9s %-6s %-11s %s\n' "$@"; }
+# Shirriff's decoder needs the Python package quickjs; without it the column stays empty (-)
 SHIRRIFF=1
 python3 -c "import quickjs" 2>/dev/null || {
 	SHIRRIFF=0
-	warn "Python-Paket quickjs fehlt: keine Gegenprobe mit Shirriffs Decoder (pip install quickjs)"
+	warn "Python package quickjs missing: no cross-check with Shirriff's decoder (pip install quickjs)"
 }
-row Design PCF Seed PnR Netz Pips Bitstream Shirriff LCA Fmax Routing
-# bitstream <run>: Text -> RBT -> (unpack -> pack bitgenau) -> Netzliste -> Vergleich mit dem RTL
+row Design PCF Seed PnR Net Pips Bitstream Shirriff LCA Fmax Routing
+# bitstream <run>: text -> RBT -> (unpack -> pack bit-exact) -> netlist -> comparison with the RTL
 bitstream() {
 	local t="$ARCH/tools"
 	python3 "$t/xc2064pack" "$1.cfg.txt" -o "$1.rbt" 2>"$1.bitstream.log" &&
@@ -130,7 +130,7 @@ bitstream() {
 		gate_json "read_verilog $1.bit.v" "$1.bit.json" && equiv "$gold" "$1.bit.json"
 }
 
-# pnr_run <run> <PCF-Spalte> <Seed-Spalte> <nextpnr-Optionen...>: ein Lauf mit allen Prüfungen, eine Zeile
+# pnr_run <run> <PCF column> <Seed column> <nextpnr options...>: one run with all checks, one row
 pnr_run() {
 	local run="$1" m="$2" s="$3"
 	shift 3
@@ -143,54 +143,54 @@ pnr_run() {
 	if [[ $rc -eq 124 ]]; then
 		pnr=Timeout
 	elif [[ $rc -ne 0 ]]; then
-		pnr=Fehler
+		pnr=error
 	else
 		f="$(fmax "$run.nextpnr.log")"
 		net=ok
-		{ gate_json "read_json $run.pnr.json" "$run.netz.json" && equiv "$gold" "$run.netz.json"; } || net=FEHLER
+		{ gate_json "read_json $run.pnr.json" "$run.net.json" && equiv "$gold" "$run.net.json"; } || net=FAIL
 		pips=ok
-		grep -q "^XC2064_EXTRACT: .* 0 Fehler$" "$run.out" || pips=FEHLER
+		grep -q "^XC2064_EXTRACT: .* 0 errors$" "$run.out" || pips=FAIL
 		[[ $pips == ok ]] && {
 			{ gate_json "read_verilog $run.extracted.v" "$run.pips.json" && equiv "$gold" "$run.pips.json"; } ||
-				pips=FEHLER
+				pips=FAIL
 		}
 		bit=ok
-		bitstream "$run" || bit=FEHLER
-		# Taktpuffer: benutzt (jedes Beispiel hat einen Takt vom Pad), mit --vopt noclkbuf keiner
+		bitstream "$run" || bit=FAIL
+		# clock buffer: used (every example has a clock from a pad), none with --vopt noclkbuf
 		if grep -q '^mux CLK\.\(AA\|II\)\.I ' "$run.cfg.txt"; then
-			[[ $s != noclkbuf ]] || bit=FEHLER
+			[[ $s != noclkbuf ]] || bit=FAIL
 		else
-			[[ $s == noclkbuf ]] || bit=FEHLER
+			[[ $s == noclkbuf ]] || bit=FAIL
 		fi
 		if [[ $SHIRRIFF -eq 1 && -f "$run.rbt" ]]; then
 			shir=ok
-			python3 "$ARCH/tools/xc2064shirriff" "$run.rbt" 2>"$run.shirriff.log" || shir=FEHLER
+			python3 "$ARCH/tools/xc2064shirriff" "$run.rbt" 2>"$run.shirriff.log" || shir=FAIL
 		fi
-		# LCA für MAKEBITS: Blöcke und Netze wie im Bitstream
+		# LCA for MAKEBITS: blocks and nets as in the bitstream
 		if [[ -f "$run.rbt" ]]; then
 			lca=ok
 			{ python3 "$ARCH/tools/xc2064lca" "$run.cfg.txt" -o "$run.lca" &&
 				python3 "$HERE/check_xact.py" lca "$run.lca" "$run.cfg.txt" "$run.rbt"; } >"$run.lca.log" 2>&1 ||
-				lca=FEHLER
+				lca=FAIL
 		fi
 	fi
 	local bad=0
-	[[ $pnr == ok && $net == ok && $pips == ok && $bit == ok && $shir != FEHLER && $lca != FEHLER ]] || bad=1
+	[[ $pnr == ok && $net == ok && $pips == ok && $bit == ok && $shir != FAIL && $lca != FAIL ]] || bad=1
 	if [[ -n "${FMIN:-}" && -n "$f" ]] && awk -v f="$f" -v m="$FMIN" 'BEGIN { exit !(f < m) }'; then
 		f="$f<$FMIN"
 		bad=1
 	fi
-	# router2: Iterationen und Zeit (viele Iterationen = Netze wechseln sich an einem Draht ab)
+	# router2: iterations and time (many iterations = nets take turns on a wire)
 	local it t
 	it="$(grep -o 'iter=[0-9]*' "$run.nextpnr.log" 2>/dev/null | tail -1 | cut -d= -f2 || true)"
 	t="$(grep -o 'Router2 time [0-9.]*' "$run.nextpnr.log" 2>/dev/null | awk '{ printf "%.0f", $3 }' || true)"
-	row "$name" "$m" "$s" "$pnr" "$net" "$pips" "$bit" "$shir" "$lca" "${f:+$f MHz}" "${it:+$it It. ${t:-?} s}"
+	row "$name" "$m" "$s" "$pnr" "$net" "$pips" "$bit" "$shir" "$lca" "${f:+$f MHz}" "${it:+$it it. ${t:-?} s}"
 	echo "$bad" >"$run.bad"
 }
 
-# Warteschlange der Läufe (je Lauf Design-Verzeichnis, Name, Gold, Lauf, Spalten, Optionen getrennt durch \x1f)
+# Queue of the runs (per run: design directory, name, gold, run, columns, options separated by \x1f)
 q_dir=() q_name=() q_gold=() q_run=() q_m=() q_s=() q_opts=()
-xnf_d=() # Designs für die XNF-Prüfung (Synthese bestanden)
+xnf_d=() # designs for the XNF check (synthesis passed)
 queue() {
 	q_dir+=("$dir") q_name+=("$name") q_gold+=("$gold") q_run+=("$1") q_m+=("$2") q_s+=("$3")
 	shift 3
@@ -205,19 +205,19 @@ for d in "${designs[@]}"; do
 	mkdir -p "$dir"
 	if ! "$YOSYS" -q -l "$dir/yosys.log" -m "$ARCH/yosys/build/xc2064.so" -p "synth_xc2064 -json $dir/$name.json" \
 		"$d" >/dev/null 2>&1; then
-		row "$name" - - "Synthese fehlgeschlagen ($dir/yosys.log)"
+		row "$name" - - "synthesis failed ($dir/yosys.log)"
 		runs=$((runs + 1))
 		failed=$((failed + 1))
 		continue
 	fi
-	# erwartete Zellzahlen (Statistik am Ende von synth_xc2064)
+	# expected cell counts (statistics at the end of synth_xc2064)
 	wrong=""
 	while read -r typ n; do
 		got="$(awk -v t="$typ" '$2 == t { c = $1 } END { print c + 0 }' "$dir/yosys.log")"
-		[[ $got -eq $n ]] || wrong+=" $typ $got statt $n"
-	done < <(sed -n 's|^// *erwartet: *\([A-Za-z0-9_]*\) *\([0-9]*\).*|\1 \2|p' "$d")
+		[[ $got -eq $n ]] || wrong+=" $typ $got instead of $n"
+	done < <(sed -n 's|^// *expected: *\([A-Za-z0-9_]*\) *\([0-9]*\).*|\1 \2|p' "$d")
 	if [[ -n $wrong ]]; then
-		row "$name" - - "Synthese:$wrong ($dir/yosys.log)"
+		row "$name" - - "synthesis:$wrong ($dir/yosys.log)"
 		runs=$((runs + 1))
 		failed=$((failed + 1))
 		continue
@@ -225,37 +225,37 @@ for d in "${designs[@]}"; do
 	gold="$dir/gold.json"
 	rm -f "${gold%.json}".*
 	if ! gold_json "$d" "$gold" || ! gold_split "$gold"; then
-		row "$name" - - "RTL für den Vergleich nicht lesbar (${gold%.json}.log)"
+		row "$name" - - "RTL not readable for the comparison (${gold%.json}.log)"
 		runs=$((runs + 1))
 		failed=$((failed + 1))
 		continue
 	fi
 	xnf_d+=("$d")
 	pcf="${d%.v}.pcf"
-	modes=(ohne)
-	[[ -f "$pcf" ]] && modes=(mit ohne)
+	modes=(without)
+	[[ -f "$pcf" ]] && modes=(with without)
 	for m in "${modes[@]}"; do
 		for s in default $SEEDS; do
 			opts=()
-			[[ $m == mit ]] && opts+=(--vopt "pcf=$pcf")
+			[[ $m == with ]] && opts+=(--vopt "pcf=$pcf")
 			[[ $s != default ]] && opts+=(--seed "$s")
 			queue "$dir/pcf-$m-seed-$s" "$m" "$s" "${opts[@]}"
 		done
 	done
-	# die anderen Gehäuse: ohne PCF mit dem Standard-Seed (der Placer nimmt nur bebondete Pads)
+	# the other packages: without PCF with the default seed (the placer only uses bonded pads)
 	for pkg in $PACKAGES; do
 		queue "$dir/package-$pkg" "$pkg" default --vopt "package=$pkg"
 	done
-	# ohne die Taktpuffer (--vopt noclkbuf, Spalte Seed: noclkbuf), mit und ohne PCF
+	# without the clock buffers (--vopt noclkbuf, column Seed: noclkbuf), with and without PCF
 	for m in "${modes[@]}"; do
 		opts=(--vopt noclkbuf)
-		[[ $m == mit ]] && opts+=(--vopt "pcf=$pcf")
+		[[ $m == with ]] && opts+=(--vopt "pcf=$pcf")
 		queue "$dir/noclkbuf-$m" "$m" noclkbuf "${opts[@]}"
 	done
 done
 
-# Läufe parallel, höchstens TEST_JOBS gleichzeitig (Standard JOBS, nie mehr als 10). Jeder Lauf schreibt seine
-# Zeile in eine Datei; ausgegeben wird in der Reihenfolge der Warteschlange, sobald alle vorherigen fertig sind.
+# Runs in parallel, at most TEST_JOBS at a time (default JOBS, never more than 10). Every run writes its
+# row to a file; rows are printed in queue order as soon as all previous ones are done.
 TEST_JOBS="${TEST_JOBS:-$JOBS}"
 [[ $TEST_JOBS -le 10 ]] || TEST_JOBS=10
 rows="$OUT/.rows"
@@ -269,7 +269,7 @@ flush() {
 			cat "$rows/$next.row"
 			failed=$((failed + $(cat "${q_run[next]}.bad")))
 		else
-			row "${q_name[next]}" "${q_m[next]}" "${q_s[next]}" "abgebrochen (${q_run[next]}.*)"
+			row "${q_name[next]}" "${q_m[next]}" "${q_s[next]}" "aborted (${q_run[next]}.*)"
 			failed=$((failed + 1))
 		fi
 		runs=$((runs + 1))
@@ -295,10 +295,10 @@ while [[ $(jobs -rp | wc -l) -gt 0 ]]; do
 done
 flush
 
-# XNF für XACT (xc2064xnf) je Design in drei Fassungen: aus Gattern, mit --lut (Logik als EQN) und mit
-# --iobff (FFs hinter Eingängen im IOB wie xc2064_iobff), jede geprüft mit check_xact.py. XNFMAP selbst läuft
-# nur in DOSBox, außerhalb des Tests.
-xnf_variants=(Gatter LUT iobff)
+# XNF for XACT (xc2064xnf) per design in three variants: from gates, with --lut (logic as EQN) and with
+# --iobff (FFs behind inputs in the IOB like xc2064_iobff), each checked with check_xact.py. XNFMAP itself runs
+# only in DOSBox, outside the test.
+xnf_variants=(gates LUT iobff)
 xrow() { printf '%-10s %-7s %-7s %s\n' "$@"; }
 xnf_run() {
 	local d="$1" dir="$2" name="$3" v f res=() bad=0 pcf=() flags=()
@@ -312,7 +312,7 @@ xnf_run() {
 			python3 "$HERE/check_xact.py" xnf "$f.xnf" "$dir/yosys.log" "${flags[@]}" "${pcf[@]}" >>"$f.log" 2>&1; then
 			res+=(ok)
 		else
-			res+=(FEHLER)
+			res+=(FAIL)
 			bad=$((bad + 1))
 		fi
 	done
@@ -339,12 +339,12 @@ if [[ ${#xnf_d[@]} -gt 0 ]]; then
 			cat "$rows/xnf-$i.row"
 			failed=$((failed + $(cat "$OUT/$name/xnf.bad")))
 		else
-			xrow "$name" "abgebrochen ($OUT/$name/xnf-*)"
+			xrow "$name" "aborted ($OUT/$name/xnf-*)"
 			failed=$((failed + ${#xnf_variants[@]}))
 		fi
 	done
 fi
 rm -rf "$rows"
 
-log "$runs Läufe und $xnf_n XNF-Netzlisten, $failed fehlgeschlagen ($TEST_JOBS parallel). Logs: $OUT"
+log "$runs runs and $xnf_n XNF netlists, $failed failed ($TEST_JOBS in parallel). Logs: $OUT"
 [[ $failed -eq 0 ]]

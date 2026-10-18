@@ -1,5 +1,5 @@
-# Pin-Zuordnung für blinky.v: set_io <Port> <PLCC68-Pin>
-# P9 hat den globalen Taktpuffer GCLK. Die übrigen Pins liegen nebeneinander am oberen Rand.
+# Pin assignment for blinky.v: set_io <port> <PLCC68 pin>
+# P9 has the global clock buffer GCLK. The other pins are next to each other on the top edge.
 set_io clk     P9
 set_io rst     P8
 set_io leds[0] P7

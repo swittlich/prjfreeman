@@ -1,15 +1,15 @@
-# Baut das Yosys-Plugin der Architektur xc2064.
-#   make                                  -> build/xc2064.so gegen yosys-config im PATH (build/install)
+# Builds the Yosys plugin of the xc2064 architecture.
+#   make                                  -> build/xc2064.so against the yosys-config in PATH (build/install)
 #   make YOSYS_CONFIG=<yosys-build>/yosys-config BUILD=build-debug
-#                                         -> gegen einen bestimmten yosys-Build (z.B. zum Debuggen)
-# Das Plugin muss mit demselben yosys gebaut werden, der es lädt.
+#                                         -> against a specific yosys build (e.g. for debugging)
+# The plugin must be built with the same yosys that loads it.
 
 YOSYS_CONFIG ?= yosys-config
 BUILD        ?= build
 NAME         := xc2064
 SRCS         := synth_$(NAME).cc
 EXTRA_FLAGS  ?= -ggdb -O0
-# Neu bauen, wenn ein anderes yosys installiert wurde (z.B. mit pyosys: andere Struktur-Layouts)
+# Rebuild when a different yosys has been installed (e.g. with pyosys: different struct layouts)
 YOSYS_HDRS   := $(wildcard $(shell $(YOSYS_CONFIG) --datdir 2>/dev/null)/include/kernel/*.h)
 
 .PHONY: all clean

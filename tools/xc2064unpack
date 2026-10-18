@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""xc2064unpack: XC2064-Bitstream (.BIT oder .RBT von XACT) -> Konfiguration als Text (Format siehe
-xc2064db/config.py). Endet mit Fehler, wenn ein programmiertes Bit oder ein Mux-Code nicht in der Bitkarte
-steht.
+"""xc2064unpack: XC2064 bitstream (.BIT or .RBT from XACT) -> configuration as text (format: see
+xc2064db/config.py). Exits with an error if a programmed bit or a mux code is not in the bit map.
 
     xc2064unpack COUNTER.BIT [-o COUNTER.txt]
 """
@@ -16,8 +15,8 @@ from xc2064db import bitstream, config, graph  # noqa: E402
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("bitstream", help=".BIT oder .RBT")
-    ap.add_argument("-o", "--output", help="Textdatei (ohne: stdout)")
+    ap.add_argument("bitstream", help=".BIT or .RBT")
+    ap.add_argument("-o", "--output", help="text file (default: stdout)")
     args = ap.parse_args()
 
     bs = bitstream.read(args.bitstream)
@@ -32,22 +31,22 @@ def main():
 
     count = collections.Counter(it.kind for it in items)
     zeros = sum(1 for b in bs.raw if b == 0)
-    print("xc2064unpack: %s: %d programmierte Bits; %s; %d Probleme" % (
+    print("xc2064unpack: %s: %d programmed bits; %s; %d problems" % (
         os.path.basename(args.bitstream), zeros, ", ".join("%d %s" % (count[k], k) for k in
                                                           ("mux", "pip", "switch", "bidi", "clb", "iob", "bit")),
         len(problems)), file=sys.stderr)
-    # Routing-Graph des Modells (xc2064db.graph): welche programmierten Pips und Switch-Verbindungen er kennt
+    # routing graph of the model (xc2064db.graph): which programmed pips and switch connections it knows
     by_bit = graph.Graph(db.entries, db.lines).by_bit()
     conns = [it for it in items if it.kind in ("pip", "switch")]
     outside = [it for it in conns if not any(b in by_bit for b in it.bits)]
-    print("xc2064unpack: %d von %d Pips und Switch-Verbindungen im Routing-Graphen%s" % (
+    print("xc2064unpack: %d of %d pips and switch connections in the routing graph%s" % (
         len(conns) - len(outside), len(conns),
-        " (fehlen: %s)" % " ".join(it.name for it in outside[:4]) if outside else ""),
+        " (missing: %s)" % " ".join(it.name for it in outside[:4]) if outside else ""),
         file=sys.stderr)
     for n in bs.notes:
-        print("xc2064unpack: Hinweis: " + n, file=sys.stderr)
+        print("xc2064unpack: note: " + n, file=sys.stderr)
     for p in problems:
-        print("xc2064unpack: FEHLER: " + p, file=sys.stderr)
+        print("xc2064unpack: ERROR: " + p, file=sys.stderr)
     return 1 if problems else 0
 
 

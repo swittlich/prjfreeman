@@ -1,19 +1,19 @@
 /*
- * synth_xc2064 – Yosys-Synthese für das XC2064-Modell (als Plugin).
+ * synth_xc2064 – Yosys synthesis for the XC2064 model (as a plugin).
  *
- * Erzeugt die Zellen, die die nextpnr-Himbächel-uarch "xc2064" erwartet:
- *   XC2000_LUT3   (I[2:0] -> O, INIT[7:0])   Funktionsgenerator F oder G
- *   XC2000_LUT4   (I[3:0] -> O, INIT[15:0])  F und G gemeinsam (Funktion von 4 Variablen)
- *   XC2000_FGM    (F[2:0], G[2:0], S -> O, INIT_F, INIT_G)  Mux-Modus: S (= B) wählt zwischen F und G
- *   XC2000_DFF    (CLK, D, S, R -> Q)        das Speicherelement der CLB (FF oder Latch, Parameter
- *                                            LATCH, CLKINV), Daten nur aus F/FG/FGM, asynchrones Set/Reset
+ * Produces the cells that the nextpnr Himbächel uarch "xc2064" expects:
+ *   XC2000_LUT3   (I[2:0] -> O, INIT[7:0])   function generator F or G
+ *   XC2000_LUT4   (I[3:0] -> O, INIT[15:0])  F and G together (function of 4 variables)
+ *   XC2000_FGM    (F[2:0], G[2:0], S -> O, INIT_F, INIT_G)  mux mode: S (= B) selects between F and G
+ *   XC2000_DFF    (CLK, D, S, R -> Q)        the storage element of the CLB (FF or latch, parameters
+ *                                            LATCH, CLKINV), data only from F/FG/FGM, asynchronous set/reset
  *   XC2000_INBUF  (PAD -> O), XC2000_OUTBUF (I -> PAD)
- *   XC2000_INFF   (PAD, K -> O)              gelatchter Eingang: FF im IOB, Takt K von der Leitung der Seite
- *   XC2000_TOBUF  (I, T -> PAD), XC2000_IOBUF (I, T -> PAD -> O)   Tristate, T = 1 schaltet ab
- * Präfix XC2000_ für die Familie (wie CC_ bei GateMate).
+ *   XC2000_INFF   (PAD, K -> O)              latched input: FF in the IOB, clock K from the line of its side
+ *   XC2000_TOBUF  (I, T -> PAD), XC2000_IOBUF (I, T -> PAD -> O)   tristate, T = 1 switches off
+ * Prefix XC2000_ for the family (like CC_ for GateMate).
  *
- * Zusätzlich die Pässe xc2064_fgm (LUTs vor einem FF zum Mux-Modus FGM zusammenfassen), xc2064_iobff (FF hinter
- * einem Eingang ins IOB legen) und xc2064_ffbuf (jedem FF einen eigenen treibenden LUT geben).
+ * In addition the passes xc2064_fgm (merge LUTs in front of an FF into the FGM mux mode), xc2064_iobff (move an FF
+ * behind an input into the IOB) and xc2064_ffbuf (give every FF its own driving LUT).
  *
  *   yosys -m arch/xc2064/yosys/build/xc2064.so -p "synth_xc2064 -json out.json" design.v
  */
@@ -22,15 +22,15 @@
 #include "kernel/sigtools.h"
 
 #ifndef FAT_ARCH_DATDIR
-#error "FAT_ARCH_DATDIR fehlt – das Plugin über das Makefile bauen"
+#error "FAT_ARCH_DATDIR missing – build the plugin via the Makefile"
 #endif
 
 USING_YOSYS_NAMESPACE
 PRIVATE_NAMESPACE_BEGIN
 
-// Im XC2064 kommen die FF-Daten nur aus dem Funktionsgenerator F derselben CLB. Jedes FF braucht
-// daher einen LUT, der sonst kein anderes FF speist. Fehlt der (D direkt von einem Eingang, einem
-// anderen FF oder einer Konstante) oder ist er schon vergeben, wird ein XC2000_LUT3-Puffer eingesetzt.
+// In the XC2064 the FF data comes only from the function generator F of the same CLB. Every FF therefore
+// needs a LUT that feeds no other FF. If there is none (D directly from an input, another FF or a
+// constant) or it is already taken, an XC2000_LUT3 buffer is inserted.
 struct Xc2064FfBufPass : public Pass
 {
 	Xc2064FfBufPass() : Pass("xc2064_ffbuf", "XC2064: give every XC2000_DFF its own driving LUT") {}
@@ -53,8 +53,8 @@ struct Xc2064FfBufPass : public Pass
 		log_header(design, "Executing XC2064_FFBUF pass.\n");
 		extra_args(args, 1, design);
 
-		// Eigene Zelltypen stehen nicht in yosys' kernel/constids.inc (ID(...) geht nur dafür),
-		// sondern werden im TwinePool des Designs angelegt.
+		// Custom cell types are not in yosys' kernel/constids.inc (ID(...) only works for those),
+		// they are created in the design's TwinePool instead.
 		TwinePool &tw = design->twines();
 		const IdString lut3 = tw.add("\\XC2000_LUT3"), lut4 = tw.add("\\XC2000_LUT4"), fgm = tw.add("\\XC2000_FGM");
 		const IdString dff = tw.add("\\XC2000_DFF");
@@ -96,13 +96,13 @@ struct Xc2064FfBufPass : public Pass
 	}
 } Xc2064FfBufPass;
 
-// Mux-Modus FGM (Data Book: "Option 3"): B wählt zwischen den Tabellen F und G, die hier eigene Eingänge haben
-// (je 1 aus A/B, 2 aus B/C, 3 aus C/D/Q). Gegenüber einer Funktion von 4 Variablen gewinnt das nur, wenn eine
-// Tabelle D und die andere das Q des eigenen Speicherelements liest: D und Q gehen nie in dieselbe Tabelle.
-// Nach dem LUT-Mapping fasst der Pass daher den LUT vor einem Speicherelement mit LUTs davor (die nur ihn
-// speisen) zusammen, wenn das Ganze eine Funktion von genau 5 Signalen ist, darunter das eigene Q, und die
-// Form S ? f(a, c, x) : g(a, c, Q) hat (oder F und G vertauscht). Daraus wird ein XC2000_FGM: S an B,
-// a an Eingang 1, c an Eingang 2, x bzw. Q an Eingang 3.
+// Mux mode FGM (Data Book: "Option 3"): B selects between the tables F and G, which here have their own inputs
+// (1 from A/B, 2 from B/C, 3 from C/D/Q each). Compared with a function of 4 variables this only gains something
+// if one table reads D and the other the Q of the CLB's own storage element: D and Q never go into the same table.
+// After LUT mapping the pass therefore merges the LUT in front of a storage element with LUTs in front of it
+// (that feed only it) if the combination is a function of exactly 5 signals, including its own Q, and has the
+// form S ? f(a, c, x) : g(a, c, Q) (or with F and G swapped). This becomes an XC2000_FGM: S on B,
+// a on input 1, c on input 2, x or Q on input 3.
 struct Xc2064FgmPass : public Pass
 {
 	Xc2064FgmPass() : Pass("xc2064_fgm", "XC2064: merge LUTs in front of a flip-flop into the FGM mux mode") {}
@@ -122,7 +122,7 @@ struct Xc2064FgmPass : public Pass
 		log("\n");
 	}
 
-	// Wert eines Signals für eine Belegung der Blätter (Bit i von env = Blatt i), LUTs aus 'inner' ausgewertet
+	// Value of a signal for an assignment of the leaves (bit i of env = leaf i), LUTs from 'inner' evaluated
 	static bool eval(SigBit bit, const std::vector<SigBit> &leaves, int env, const dict<SigBit, Cell *> &inner,
 			 const SigMap &sigmap)
 	{
@@ -130,7 +130,7 @@ struct Xc2064FgmPass : public Pass
 			if (leaves[i] == bit)
 				return (env >> i) & 1;
 		if (!bit.wire)
-			return bit.data == State::S1; // x: der LUT-Inhalt hängt davon nicht ab
+			return bit.data == State::S1; // x: the LUT content does not depend on it
 		Cell *lut = inner.at(bit);
 		SigSpec in = sigmap(lut->getPort(ID(I)));
 		int idx = 0;
@@ -154,8 +154,8 @@ struct Xc2064FgmPass : public Pass
 		for (auto module : design->selected_modules()) {
 			SigMap sigmap(module);
 			dict<SigBit, Cell *> lut_driver;
-			dict<SigBit, pool<Cell *>> users; // Zellen, die ein Signal lesen
-			pool<SigBit> port_out;            // Signale an Ausgängen des Moduls
+			dict<SigBit, pool<Cell *>> users; // cells that read a signal
+			pool<SigBit> port_out;            // signals at outputs of the module
 			for (auto cell : module->cells())
 				for (auto &conn : cell->connections()) {
 					if (cell->type.in(lut3, lut4) && conn.first == ID(O))
@@ -179,7 +179,7 @@ struct Xc2064FgmPass : public Pass
 				if (ld == lut_driver.end() || gone.count(ld->second))
 					continue;
 				Cell *top = ld->second;
-				// LUTs vor dem D-LUT, die nur ihn speisen
+				// LUTs in front of the D LUT that feed only it
 				std::vector<SigBit> top_in;
 				for (auto bit : sigmap(top->getPort(ID(I))))
 					if (bit.wire && std::find(top_in.begin(), top_in.end(), bit) == top_in.end())
@@ -191,7 +191,7 @@ struct Xc2064FgmPass : public Pass
 					    users[bit] == pool<Cell *>{top} && !port_out.count(bit))
 						cand.push_back(bit);
 				}
-				// Teilmengen, die größten zuerst: je mehr LUTs aufgehen, desto besser
+				// subsets, the largest first: the more LUTs are absorbed, the better
 				std::vector<int> subsets;
 				for (int m = 1; m < (1 << GetSize(cand)); m++)
 					subsets.push_back(m);
@@ -229,7 +229,7 @@ struct Xc2064FgmPass : public Pass
 		log("Merged %d LUTs into %d XC2000_FGM cells.\n", removed, merged);
 	}
 
-	// Hängt die Funktion tt der 5 Blätter von Blatt v ab, wenn Blatt s den Wert sv hat?
+	// Does the function tt of the 5 leaves depend on leaf v when leaf s has the value sv?
 	static bool depends(uint32_t tt, int s, int sv, int v)
 	{
 		for (int env = 0; env < 32; env++)
@@ -248,12 +248,12 @@ struct Xc2064FgmPass : public Pass
 			for (int x = 0; x < 5; x++) {
 				if (x == iq || x == s)
 					continue;
-				// Tabelle F (S = 1) und G (S = 0): welche liest x, welche Q?
+				// table F (S = 1) and G (S = 0): which one reads x, which one Q?
 				for (int f_reads_q = 0; f_reads_q < 2; f_reads_q++) {
 					int in3_f = f_reads_q ? iq : x, in3_g = f_reads_q ? x : iq;
 					if (depends(tt, s, 1, in3_g) || depends(tt, s, 0, in3_f))
 						continue;
-					std::vector<int> ac; // die beiden übrigen Blätter: Eingang 1 und 2 beider Tabellen
+					std::vector<int> ac; // the two remaining leaves: input 1 and 2 of both tables
 					for (int v = 0; v < 5; v++)
 						if (v != s && v != iq && v != x)
 							ac.push_back(v);
@@ -268,7 +268,7 @@ struct Xc2064FgmPass : public Pass
 							init |= ((tt >> env) & 1) << idx;
 						}
 						SigSpec pins;
-						for (int k = 0; k < 3; k++) // nur Eingänge, von denen die Tabelle abhängt
+						for (int k = 0; k < 3; k++) // only inputs the table depends on
 							pins.append(depends(tt, s, sv, in[k]) ? SigSpec(leaves[in[k]]) : SigSpec(State::Sx));
 						cell->setPort(half ? port_g : port_f, pins);
 						cell->setParam(half ? init_g : init_f, Const(init, 8));
@@ -283,10 +283,10 @@ struct Xc2064FgmPass : public Pass
 	}
 } Xc2064FgmPass;
 
-// Gelatchter Eingang (XACT: I:Q, Data Book: "registered input"): das FF im IOB zwischen Pad und Eingang, steigende
-// Flanke, Takt von der Taktleitung der Chipseite, ohne Set/Reset. Der Pass legt ein FF dorthin, dessen D direkt
-// am Eingang eines Pads hängt, wenn sonst nichts diesen Eingang liest: aus XC2000_INBUF und XC2000_DFF wird ein
-// XC2000_INFF. Das spart je Eingang eine CLB.
+// Latched input (XACT: I:Q, Data Book: "registered input"): the FF in the IOB between pad and input, rising
+// edge, clock from the clock line of the chip side, no set/reset. The pass moves an FF there whose D hangs
+// directly on the input of a pad if nothing else reads that input: XC2000_INBUF and XC2000_DFF become one
+// XC2000_INFF. This saves one CLB per input.
 struct Xc2064IobFfPass : public Pass
 {
 	Xc2064IobFfPass() : Pass("xc2064_iobff", "XC2064: move input flip-flops into the IOBs") {}
@@ -319,7 +319,7 @@ struct Xc2064IobFfPass : public Pass
 		int moved = 0;
 		for (auto module : design->selected_modules()) {
 			SigMap sigmap(module);
-			dict<SigBit, int> readers; // lesende Zellen-Ports und Ausgänge des Moduls
+			dict<SigBit, int> readers; // reading cell ports and outputs of the module
 			dict<SigBit, Cell *> inbuf_of;
 			for (auto cell : module->cells()) {
 				if (cell->type == inbuf)
@@ -334,7 +334,7 @@ struct Xc2064IobFfPass : public Pass
 					for (auto bit : sigmap(wire))
 						readers[bit]++;
 
-			auto inactive = [&](Cell *cell, IdString port) { // Set/Reset offen oder konstant aus
+			auto inactive = [&](Cell *cell, IdString port) { // set/reset open or constantly off
 				if (!cell->hasPort(port))
 					return true;
 				for (auto bit : sigmap(cell->getPort(port)))
@@ -485,14 +485,14 @@ struct SynthXc2064Pass : public ScriptPass
 		}
 
 		if (check_label("coarse")) {
-			// Tristate: interne Tristate-Netze werden Logik, die an Ports bleiben als $tribuf für
-			// iopadmap (wie bei GateMate). inout-Ports, die nur gelesen werden, werden Eingänge.
+			// Tristate: internal tristate nets become logic, those at ports stay $tribuf for
+			// iopadmap (as for GateMate). inout ports that are only read become inputs.
 			run("proc");
 			run("flatten");
 			run("tribuf -logic");
 			run("deminout");
-			// Zustandsautomaten behalten ihre Kodierung (yosys kodiert sonst oft one-hot um: beim XC2064 mit
-			// einem FF je CLB teuer, und die Register hießen nicht mehr wie im RTL)
+			// State machines keep their encoding (otherwise yosys often re-encodes them one-hot: expensive on the
+			// XC2064 with one FF per CLB, and the registers would no longer be named as in the RTL)
 			run(fsm || help_mode ? "synth -run coarse:fine" : "synth -nofsm -run coarse:fine",
 			    "(-nofsm unless -fsm)");
 		}
@@ -503,16 +503,16 @@ struct SynthXc2064Pass : public ScriptPass
 			run("opt -full");
 			run("techmap");
 			run("opt -fast");
-			// Speicherelement: FF oder Latch, Takt beliebiger Polarität, asynchrones Set/Reset,
-			// nach dem Laden 0. Enables und synchrone Resets werden zu Logik.
+			// Storage element: FF or latch, clock of either polarity, asynchronous set/reset,
+			// 0 after loading. Enables and synchronous resets become logic.
 			run("dfflegalize -cell $_DFF_P_ 0 -cell $_DFF_N_ 0 -cell $_DFFSR_PPP_ 0 -cell $_DFFSR_NPP_ 0"
 			    " -cell $_DLATCH_P_ 0 -cell $_DLATCH_N_ 0 -cell $_DLATCHSR_PPP_ 0 -cell $_DLATCHSR_NPP_ 0");
 			run("opt_clean");
 		}
 
 		if (check_label("map_io", "(unless -noiopad)")) {
-			// Vor dem LUT-Mapping, damit der Inverter für T (T = 1 schaltet ab, $_TBUF_ hat ein
-			// Enable) noch in einem LUT aufgeht
+			// Before LUT mapping, so that the inverter for T (T = 1 switches off, $_TBUF_ has an
+			// enable) is still absorbed into a LUT
 			if (!noiopad || help_mode)
 				run("iopadmap -bits -inpad XC2000_INBUF O:PAD -outpad XC2000_OUTBUF I:PAD"
 				    " -toutpad XC2000_TOBUF ~T:I:PAD -tinoutpad XC2000_IOBUF ~T:O:I:PAD"
@@ -522,17 +522,17 @@ struct SynthXc2064Pass : public ScriptPass
 		}
 
 		if (check_label("map_luts")) {
-			// XC2000_LUT3 kostet 1, XC2000_LUT4 kostet 2 (belegt F und G)
+			// XC2000_LUT3 costs 1, XC2000_LUT4 costs 2 (occupies F and G)
 			run("abc -lut 3:4 -dress");
 			run("opt_clean");
 		}
 
 		if (check_label("map_cells")) {
 			run("techmap -map " + datdir + "/cells_map.v");
-			// Mux-Modus FGM: LUTs vor einem FF mit Rückführung von Q zu einer Funktion von 5 Signalen
+			// Mux mode FGM: LUTs in front of an FF with feedback of Q into a function of 5 signals
 			if (!nofgm || help_mode)
 				run("xc2064_fgm", "(unless -nofgm)");
-			// FF direkt hinter einem Eingang: in das IOB (gelatchter Eingang)
+			// FF directly behind an input: into the IOB (latched input)
 			if (!noiobff || help_mode)
 				run("xc2064_iobff", "(unless -noiobff)");
 			run("xc2064_ffbuf");

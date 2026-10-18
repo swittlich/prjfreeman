@@ -1,9 +1,9 @@
-// 8-Bit-Schieberegister mit parallelem Laden und Enable: load lädt din, sonst schiebt en sin nach q[0] und
-// q[i-1] nach q[i], ohne en hält es. Jedes Bit ist eine Funktion von 5 Signalen (load, din[i], en, q[i-1]
-// und sein eigenes q[i]): load ? din[i] : (en ? q[i-1] : q[i]). Das passt in den Mux-Modus FGM einer CLB
-// (B = load wählt, F liest din[i] an D, G die Rückführung q[i]), sonst braucht ein Bit zwei CLBs.
-// erwartet: XC2000_FGM 8
-// erwartet: XC2000_DFF 8
+// 8-bit shift register with parallel load and enable: load loads din, otherwise en shifts sin into q[0] and
+// q[i-1] into q[i]; without en it holds. Each bit is a function of 5 signals (load, din[i], en, q[i-1]
+// and its own q[i]): load ? din[i] : (en ? q[i-1] : q[i]). That fits into the mux mode FGM of a CLB
+// (B = load selects, F reads din[i] on D, G the feedback q[i]); otherwise a bit needs two CLBs.
+// expected: XC2000_FGM 8
+// expected: XC2000_DFF 8
 module shiftreg (
 	input        clk,
 	input        load,

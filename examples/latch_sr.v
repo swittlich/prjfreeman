@@ -1,5 +1,5 @@
-// Test der Speicher-Varianten des XC2064-Modells: Flipflop mit fallender Flanke, asynchrones
-// Set/Reset und ein transparentes Latch. Pins in latch_sr.pcf, der Takt an P9 (GCLK).
+// Test of the storage variants of the XC2064 model: flip-flop on the falling edge, asynchronous
+// set/reset and a transparent latch. Pins in latch_sr.pcf, the clock on P9 (GCLK).
 module top (
 	input        clk,
 	input        en,
@@ -9,9 +9,9 @@ module top (
 	output [2:0] q
 );
 	reg q_neg, q_sr, q_lat;
-	always @(negedge clk)                   // fallende Flanke -> CLKINV
+	always @(negedge clk)                   // falling edge -> CLKINV
 		q_neg <= d[0] ^ d[1];
-	always @(posedge clk or posedge set or posedge rst)  // asynchrones Set/Reset
+	always @(posedge clk or posedge set or posedge rst)  // asynchronous set/reset
 		if (rst) q_sr <= 1'b0;
 		else if (set) q_sr <= 1'b1;
 		else q_sr <= d[0] & d[1];

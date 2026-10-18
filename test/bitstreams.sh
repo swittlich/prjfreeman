@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Test der Bitstream-Werkzeuge mit echten Bitstreams aus Xilinx' XACT: die Referenzen aus openxc2064
-# (bitstream/XACT_comparisons, hardware/bitstreams/AND_OR.BIT) und Shirriffs TEST1.RBT.
-#   test/bitstreams.sh [datei.BIT|datei.RBT ...]
-# Prüft:
-#   - python3 -m xc2064db: Gegenproben der Datenquellen (Bitkarte, Leitungen, Switch-Matrizen, CLB-Muxe)
-#   - xc2064unpack je Bitstream: jedes programmierte Bit und jeder Mux-Code steht in der Bitkarte
-#   - Rundlauf: xc2064pack macht aus dem Text wieder einen Bitstream, der bitgenau dem Original gleicht
-#   - xc2064shirriff: Shirriffs Decoder (JavaScript in QuickJS) dekodiert jeden Bitstream wie das Paket
-#     (nur mit dem Python-Paket quickjs)
-# Die Textdateien liegen danach unter build/flows/xc2064/test/bitstreams/.
+# Test of the bitstream tools with real bitstreams from Xilinx's XACT: the references from openxc2064
+# (bitstream/XACT_comparisons, hardware/bitstreams/AND_OR.BIT) and Shirriff's TEST1.RBT.
+#   test/bitstreams.sh [file.BIT|file.RBT ...]
+# Checks:
+#   - python3 -m xc2064db: cross-checks of the data sources (bit map, lines, switch matrices, CLB muxes)
+#   - xc2064unpack per bitstream: every programmed bit and every mux code is in the bit map
+#   - round trip: xc2064pack turns the text back into a bitstream that is bit-identical to the original
+#   - xc2064shirriff: Shirriff's decoder (JavaScript in QuickJS) decodes every bitstream like the package
+#     (only with the Python package quickjs)
+# Afterwards the text files are in build/flows/xc2064/test/bitstreams/.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARCH="$(dirname "$HERE")"
 source "$ARCH/../../scripts/lib.sh"
@@ -22,7 +22,7 @@ fi
 mkdir -p "$OUT"
 failed=0
 
-log "Gegenproben der Datenquellen (python3 -m xc2064db)"
+log "Cross-checks of the data sources (python3 -m xc2064db)"
 if ! (cd "$ARCH" && python3 -m xc2064db >"$OUT/xc2064db.log" 2>&1); then
 	cat "$OUT/xc2064db.log"
 	failed=$((failed + 1))
@@ -35,17 +35,17 @@ for f in "${files[@]}"; do
 	name="$(basename "$f")"
 	rc=0
 	python3 "$ARCH/tools/xc2064unpack" "$f" -o "$OUT/${name%.*}.txt" 2>"$OUT/${name%.*}.log" || rc=$?
-	printf '  %-14s %s\n' "$name" "$(grep -m1 '^xc2064unpack: .*Probleme' "$OUT/${name%.*}.log" | sed 's/^xc2064unpack: [^:]*: //')"
+	printf '  %-14s %s\n' "$name" "$(grep -m1 '^xc2064unpack: .*problems' "$OUT/${name%.*}.log" | sed 's/^xc2064unpack: [^:]*: //')"
 	if [[ $rc -ne 0 ]]; then
-		grep -v ' Probleme$' "$OUT/${name%.*}.log" | head -5 | sed 's/^/    /'
+		grep -v ' problems$' "$OUT/${name%.*}.log" | head -5 | sed 's/^/    /'
 		failed=$((failed + 1))
 		continue
 	fi
-	# Rundlauf: Text -> RBT, bitgenau gleich dem Original?
+	# Round trip: text -> RBT, bit-identical to the original?
 	rc=0
 	python3 "$ARCH/tools/xc2064pack" "$OUT/${name%.*}.txt" -o "$OUT/${name%.*}.rt.rbt" --compare "$f" \
 		2>>"$OUT/${name%.*}.log" || rc=$?
-	printf '  %-14s Rundlauf mit xc2064pack: %s\n' "" "$(grep -m1 'Vergleich mit' "$OUT/${name%.*}.log" | sed 's/^.*: //')"
+	printf '  %-14s round trip with xc2064pack: %s\n' "" "$(grep -m1 'comparison with' "$OUT/${name%.*}.log" | sed 's/^.*: //')"
 	if [[ $rc -ne 0 ]]; then
 		tail -2 "$OUT/${name%.*}.log" | sed 's/^/    /'
 		failed=$((failed + 1))
@@ -53,14 +53,14 @@ for f in "${files[@]}"; do
 done
 
 if python3 -c "import quickjs" 2>/dev/null; then
-	log "Gegenprobe mit Shirriffs Decoder (xc2064shirriff)"
+	log "Cross-check with Shirriff's decoder (xc2064shirriff)"
 	rc=0
 	python3 "$ARCH/tools/xc2064shirriff" "${files[@]}" 2>"$OUT/shirriff.log" || rc=$?
 	sed 's/^xc2064shirriff: /  /' "$OUT/shirriff.log"
 	[[ $rc -eq 0 ]] || failed=$((failed + 1))
 else
-	warn "Python-Paket quickjs fehlt: keine Gegenprobe mit Shirriffs Decoder (pip install quickjs)"
+	warn "Python package quickjs missing: no cross-check with Shirriff's decoder (pip install quickjs)"
 fi
 
-log "${#files[@]} Bitstreams, $failed Fehler. Textdateien: $OUT"
+log "${#files[@]} bitstreams, $failed errors. Text files: $OUT"
 [[ $failed -eq 0 ]]

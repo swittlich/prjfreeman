@@ -1,31 +1,31 @@
-"""Konfiguration als lesbare Textdatei (das Format zwischen nextpnr und xc2064pack, Rückweg xc2064unpack).
+"""Configuration as a readable text file (the format between nextpnr and xc2064pack; way back: xc2064unpack).
 
-Eine Zeile je Eintrag, Namen wie bei Shirriff bzw. XACT, '#' leitet einen Kommentar ein:
+One line per entry, names as in Shirriff or XACT, '#' starts a comment:
 
-    device XC2064                   Kopf; package PC68, PD48, PC44 oder PG68 (Gehäuse, nur für den RBT-Kopf)
-    mux AB.A row.A.local.1          CLB-Eingang A..D, K und die gewählte Quellleitung (none: keine)
-    mux P59.O col.I.local.4         Ausgangs-Mux eines IOB (Leitung, X/Y einer CLB wie AH.X, GCLK, ACLK)
-    mux P59.T col.I.long.2          Tristate-Mux eines IOB: Quelle (Tristate), on (immer aktiv) oder off
-    mux P9.K row.A.local.1          Takt-Mux der gelatchten Eingänge einer Chipseite (P9 oben, P59 rechts,
-                                    P27 unten, P24 links): Quellleitung oder GCLK
-    mux CLK.AA.I P9                 Eingang des Taktpuffers GCLK (CLK.AA.I) bzw. ACLK (CLK.II.I): Leitung,
-                                    Pad (P9, P11 bzw. P43, P46) oder OSC (Quarzoszillator, nur ACLK)
-    pip col.B.local.1:row.C.local.3 einzelnes PIP-Bit, Kreuzung einer col- mit einer row-Leitung
-    switch BC.8.1 1-3               Verbindung zweier Pins einer Switch-Matrix (Magic-Bit)
-    bidi 125G6 right                Repowering-Puffer und seine Richtung: down/right (Bit programmiert) oder
-                                    up/left; "bidi auto": aus dem Routing ableiten (xc2064pack)
-    clb AB BASE:FG F:A:B:C ...      Konfiguration einer CLB (Felder: blocks.py)
-    iob P8 I:Q                      Eingang eines IOB direkt (PAD) oder gelatcht (Q, FF im IOB)
-    other UNknown 2 1               Optionen "Other" (Name, 0/1)
-    bit <Name>                      jedes andere programmierte Bit mit seinem Namen aus XC2064-def.txt (seit
-                                    die Codes der Taktpuffer bekannt sind, gibt es keins mehr)
-    port P9 clk input               (nextpnr) Name und Richtung des Top-Level-Ports am Pad, für den Rückweg
-    reg AB ctr[0]                   (nextpnr) Name des Netzes am Q des Speicherelements einer CLB bzw. am
-                                    gelatchten Eingang eines Pads (reg P8 s1[0]), ebenso
+    device XC2064                   header; package PC68, PD48, PC44 or PG68 (chip package, only for the RBT header)
+    mux AB.A row.A.local.1          CLB input A..D, K and the selected source line (none: no source)
+    mux P59.O col.I.local.4         output mux of an IOB (line, X/Y of a CLB such as AH.X, GCLK, ACLK)
+    mux P59.T col.I.long.2          tristate mux of an IOB: source (tristate), on (always active) or off
+    mux P9.K row.A.local.1          clock mux of the latched inputs of a chip side (P9 top, P59 right,
+                                    P27 bottom, P24 left): source line or GCLK
+    mux CLK.AA.I P9                 input of the clock buffer GCLK (CLK.AA.I) or ACLK (CLK.II.I): line,
+                                    pad (P9, P11 or P43, P46) or OSC (crystal oscillator, ACLK only)
+    pip col.B.local.1:row.C.local.3 single PIP bit, crossing of a col line with a row line
+    switch BC.8.1 1-3               connection of two pins of a switch matrix (magic bit)
+    bidi 125G6 right                repowering buffer and its direction: down/right (bit programmed) or
+                                    up/left; "bidi auto": derive it from the routing (xc2064pack)
+    clb AB BASE:FG F:A:B:C ...      configuration of a CLB (fields: blocks.py)
+    iob P8 I:Q                      input of an IOB direct (PAD) or latched (Q, FF in the IOB)
+    other UNknown 2 1               options "Other" (name, 0/1)
+    bit <name>                      any other programmed bit with its name from XC2064-def.txt (since the
+                                    codes of the clock buffers are known, there are none left)
+    port P9 clk input               (nextpnr) name and direction of the top-level port at the pad, for the way back
+    reg AB ctr[0]                   (nextpnr) name of the net at Q of the storage element of a CLB or at the
+                                    latched input of a pad (reg P8 s1[0]), likewise
 
-decode() liefert jede CLB, jedes IOB, jeden Mux und alle Optionen, dazu jedes programmierte PIP-, Switch-,
-Bidi- und sonstige Bit; daraus ergibt sich mit encode() jedes Bit wieder (verlustfrei, geprüft mit allen
-XACT-Bitstreams). Fehlt etwas im Text (Ausgabe von nextpnr), gilt der Grundzustand von XACT (blocks.py).
+decode() yields every CLB, every IOB, every mux and all options, plus every programmed PIP, switch, bidi and
+other bit; from these, encode() gives back every bit (lossless, checked with all XACT bitstreams). Whatever is
+missing in the text (output of nextpnr) gets XACT's default state (blocks.py).
 """
 import collections
 
@@ -35,7 +35,7 @@ Item = collections.namedtuple("Item", "kind name value bits comment")
 
 
 class Database:
-    """Alles, was Dekodierung und Kodierung brauchen, einmal geladen"""
+    """Everything that decoding and encoding need, loaded once"""
 
     def __init__(self):
         self.entries = bitmap.load()
@@ -53,7 +53,7 @@ class Database:
         self.block_bits = {b for t in bl.tiles for b in bl.clb_bitset[t]}
         self.block_bits |= {bl.bit("IOB %s.I PAD/Latched" % p) for p in bl.pads}
         self.block_bits |= {bl.bit("Other " + o) for o in bl.others}
-        # Namen -> Bit für die Kodierung
+        # names -> bit for encoding
         self.pip_bit = {self.lines.pip_name(e.key[0]): e.index for e in self.entries if e.kind == "pip"}
         self.switch_bit = {}
         for e in self.entries:
@@ -63,24 +63,24 @@ class Database:
         self.bidi_bit = {e.key[0]: e.index for e in self.entries if e.kind == "bidi"}
 
 
-iob_source_name = iobmux.source_name  # Name einer Quelle des O- bzw. T-Mux im Textformat
+iob_source_name = iobmux.source_name  # name of a source of the O or T mux in the text format
 
 
 def _none_value(m, c):
-    """Wert eines Muxes ohne Quelle: "none" für den Grundzustand (kein Bit programmiert), sonst none:Code"""
+    """Value of a mux without a source: "none" for the default state (no bit programmed), otherwise none:<code>"""
     return "none" if c == (1 << len(m.bits)) - 1 else "none:%d" % c
 
 
 def decode(db, raw):
-    """(Liste von Item, Liste von Problemen). Problem: programmiertes NOT-USED-Bit, unbekannter Mux-Code
-    oder ein PIP, dessen Leitungen nicht bekannt sind."""
+    """(list of Item, list of problems). Problem: programmed NOT-USED bit, unknown mux code or a PIP whose lines
+    are not known."""
     items, problems = [], []
     k_used = {}
     for name, m in sorted(db.muxes.items()):
         try:
             code, src = m.decode(raw)
         except KeyError:
-            problems.append("%s: unbekannter Mux-Code %d" % (name, m.code(raw)))
+            problems.append("%s: unknown mux code %d" % (name, m.code(raw)))
             continue
         if m.pin == "K":
             k_used[m.tile] = src is not None
@@ -92,30 +92,30 @@ def decode(db, raw):
             items.append(Item("mux", pin + ".O", iob_source_name(iob.o[iob.omux[c]]), sorted(iob.obits.values()),
                               "Code %d" % c))
         else:
-            problems.append("%s.O: unbekannter Mux-Code %d" % (pin, c))
+            problems.append("%s.O: unknown mux code %d" % (pin, c))
         c = iobmux.code(iob.tbits, raw)
         if c in iob.tmux:
             value = iob_source_name(iob.t[iob.tmux[c]])
         elif c in (iob.t_off, iob.t_on):
             value = "off" if c == iob.t_off else "on"
         else:
-            problems.append("%s.T: unbekannter Code %d" % (pin, c))
+            problems.append("%s.T: unknown code %d" % (pin, c))
             continue
         items.append(Item("mux", pin + ".T", value, sorted(iob.tbits.values()), "Code %d" % c))
-    for pin, km in sorted(db.kmuxes.items()):  # Takt-Mux der gelatchten Eingänge einer Seite
+    for pin, km in sorted(db.kmuxes.items()):  # clock mux of the latched inputs of one side
         c = iobmux.code(km.bits, raw)
         if c in km.codes:
             items.append(Item("mux", pin + ".K", iob_source_name(km.sources[km.codes[c]]), sorted(km.bits.values()),
-                              "Code %d, Takt %s" % (c, {"T": "oben", "R": "rechts", "B": "unten", "L": "links"}[km.side])))
+                              "Code %d, clock %s" % (c, {"T": "top", "R": "right", "B": "bottom", "L": "left"}[km.side])))
         else:
-            problems.append("%s.K: unbekannter Mux-Code %d" % (pin, c))
-    for name, cm in sorted(db.clkmuxes.items()):  # Eingänge der Taktpuffer GCLK und ACLK
+            problems.append("%s.K: unknown mux code %d" % (pin, c))
+    for name, cm in sorted(db.clkmuxes.items()):  # inputs of the clock buffers GCLK and ACLK
         c = iobmux.code(cm.bits, raw)
         if c in cm.codes:
             items.append(Item("mux", name, iob_source_name(cm.sources[cm.codes[c]]), sorted(cm.bits.values()),
                               "Code %d, %s" % (c, cm.net)))
         else:
-            problems.append("%s: unbekannter Mux-Code %d" % (name, c))
+            problems.append("%s: unknown mux code %d" % (name, c))
     bl = db.blocks
     for t in bl.tiles:
         f = blocks.decode_clb(bl, raw, t, k_used.get(t, False))
@@ -128,18 +128,18 @@ def decode(db, raw):
         if raw[e.index] != 0 or e.index in db.mux_bits or e.index in db.block_bits:
             continue
         if e.kind == "unused":
-            problems.append("Bit %d (Rahmen %d, Stelle %d) ist programmiert, laut Bitkarte aber unbenutzt"
+            problems.append("Bit %d (frame %d, position %d) is programmed, but unused according to the bit map"
                             % (e.index, e.index // bitmap.FRAME_BITS, e.index % bitmap.FRAME_BITS))
         elif e.kind == "pip":
             name = db.lines.pip_name(e.key[0])
             if name is None:
-                problems.append("PIP %s (Bit %d): Leitungen unbekannt" % (e.key[0], e.index))
+                problems.append("PIP %s (bit %d): lines unknown" % (e.key[0], e.index))
                 continue
             items.append(Item("pip", name, None, [e.index], e.key[0]))
         elif e.kind == "switch":
             g, p1, p2 = e.key
             items.append(Item("switch", db.switch_pos[g], "%d-%d" % tuple(sorted((p1, p2))), [e.index], None))
-        elif e.kind == "bidi":  # programmiert: der Puffer treibt nach unten bzw. rechts (graph._bidi)
+        elif e.kind == "bidi":  # programmed: the buffer drives down or right (graph._bidi)
             gx, gy = (int(v) for v in e.key[0].split("G"))
             line = db.lines.col_name.get(gx)
             items.append(Item("bidi", e.key[0], "down" if line else "right", [e.index],
@@ -154,9 +154,9 @@ ORDER = {"device": 0, "package": 0, "port": 1, "clb": 2, "iob": 3, "mux": 4, "pi
 
 
 def format_text(items, source=None, header=()):
-    out = ["# XC2064-Konfiguration als Text (arch/xc2064/xc2064db/config.py)"]
+    out = ["# XC2064 configuration as text (arch/xc2064/xc2064db/config.py)"]
     if source:
-        out.append("# Quelle: %s" % source)
+        out.append("# Source: %s" % source)
     out.append("device XC2064")
     out += list(header)
     for it in sorted(items, key=lambda it: (ORDER[it.kind], it.name, it.value or "")):
@@ -172,7 +172,7 @@ Line = collections.namedtuple("Line", "kind name value lineno")
 
 
 def parse_text(text):
-    """Zeilen der Textdatei als Liste von Line (kind, name, value)"""
+    """Lines of the text file as a list of Line (kind, name, value)"""
     out = []
     for n, raw_line in enumerate(text.splitlines(), 1):
         line = raw_line.split("#", 1)[0].strip()
@@ -189,13 +189,13 @@ def parse_text(text):
             name, _, value = rest.rpartition(" ")
             out.append(Line(kind, name, value, n))
         else:
-            raise ValueError("Zeile %d: unbekannte Art %r" % (n, kind))
+            raise ValueError("line %d: unknown kind %r" % (n, kind))
     return out
 
 
 def encode(db, lines, defaults=True):
-    """Zeilen -> raw (Liste 0/1, 0 = programmiert). defaults: zuerst der Grundzustand von XACT für alles, was
-    die Zeilen nicht festlegen. Fehler (ValueError) bei unbekannten Namen, Quellen und Codes."""
+    """Lines -> raw (list of 0/1, 0 = programmed). defaults: first XACT's default state for everything the lines
+    do not specify. Error (ValueError) on unknown names, sources and codes."""
     raw = [1] * bitmap.NBITS
     bl = db.blocks
 
@@ -222,7 +222,7 @@ def encode(db, lines, defaults=True):
         try:
             _encode_line(db, raw, l)
         except (KeyError, ValueError) as e:
-            raise ValueError("Zeile %d (%s %s %s): %s" % (l.lineno, l.kind, l.name, l.value, e))
+            raise ValueError("line %d (%s %s %s): %s" % (l.lineno, l.kind, l.name, l.value, e))
     return raw
 
 
@@ -241,12 +241,12 @@ def _encode_line(db, raw, l):
             if l.value.startswith("none"):
                 code = int(l.value[5:]) if l.value.startswith("none:") else (1 << len(m.bits)) - 1
                 if m.codes.get(code, 0) is not None:
-                    raise ValueError("Code %d ist kein none-Code" % code)
+                    raise ValueError("code %d is not a none code" % code)
             else:
                 idx = [i for i, s in enumerate(m.sources) if s.line == l.value]
                 codes = [c for c, i in m.codes.items() if idx and i == idx[0]]
                 if not codes:
-                    raise ValueError("keine Quelle %s" % l.value)
+                    raise ValueError("no source %s" % l.value)
                 code = codes[0]
             _set_code(raw, m.bits, code)
             return
@@ -255,7 +255,7 @@ def _encode_line(db, raw, l):
             km = db.kmuxes[pin]
             found = [c for c, k in km.codes.items() if iob_source_name(km.sources[k]) == l.value]
             if not found:
-                raise ValueError("keine Quelle %s" % l.value)
+                raise ValueError("no source %s" % l.value)
             _set_code(raw, km.bits, found[0])
             return
         if pin in db.iobs and which in ("O", "T"):
@@ -266,17 +266,17 @@ def _encode_line(db, raw, l):
             lst, codes, bits = (iob.o, iob.omux, iob.obits) if which == "O" else (iob.t, iob.tmux, iob.tbits)
             found = [c for c, k in codes.items() if iob_source_name(lst[k]) == l.value]
             if not found:
-                raise ValueError("keine Quelle %s" % l.value)
+                raise ValueError("no source %s" % l.value)
             _set_code(raw, bits, found[0])
             return
         if l.name in db.clkmuxes:
             cm = db.clkmuxes[l.name]
             found = [c for c, k in cm.codes.items() if iob_source_name(cm.sources[k]) == l.value]
             if not found:
-                raise ValueError("keine Quelle %s" % l.value)
+                raise ValueError("no source %s" % l.value)
             _set_code(raw, cm.bits, found[0])
             return
-        raise ValueError("unbekannter Mux")
+        raise ValueError("unknown mux")
     if l.kind == "pip":
         raw[db.pip_bit[l.name]] = 0
     elif l.kind == "switch":
@@ -286,7 +286,7 @@ def _encode_line(db, raw, l):
         if l.name == "auto":
             return
         if l.value not in ("down", "right", "up", "left"):
-            raise ValueError("Richtung %r" % l.value)
+            raise ValueError("direction %r" % l.value)
         raw[db.bidi_bit[l.name]] = 0 if l.value in ("down", "right") else 1
     elif l.kind == "clb":
         f = dict(blocks.DEFAULT_CLB)

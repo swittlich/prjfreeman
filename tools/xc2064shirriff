@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""xc2064shirriff: Gegenprobe eines Bitstreams mit Shirriffs Decoder (shirriff-xc2064/html, in QuickJS ohne
-Browser, siehe xc2064db/shirriff.py). Shirriff liest die RBT-Datei selbst und dekodiert sie; das Ergebnis muss
-zur eigenen Dekodierung passen: das Innere jeder CLB (Basis, Eingänge, Wahrheitstabellen, X/Y, Q, Set/Reset,
-Takt), die gewählten Quellen der CLB-Eingänge, O-, T- und K-Muxe der IOBs, gelatchte Eingänge, Pips,
-Switch-Verbindungen und Puffer.
+"""xc2064shirriff: cross-check of a bitstream with Shirriff's decoder (shirriff-xc2064/html, in QuickJS without a
+browser, see xc2064db/shirriff.py). Shirriff's code reads the RBT file itself and decodes it; the result must
+match our own decoding: the interior of each CLB (base, inputs, truth tables, X/Y, Q, set/reset,
+clock), the selected sources of the CLB inputs, O, T and K muxes of the IOBs, latched inputs, pips,
+switch connections and buffers.
 
-    xc2064shirriff design.rbt [weitere .rbt/.bit ...]
+    xc2064shirriff design.rbt [more .rbt/.bit ...]
 
-Endet mit Fehler, wenn etwas abweicht. Braucht das Python-Paket quickjs (.devcontainer/requirements.txt).
+Exits with an error if anything deviates. Needs the Python package quickjs (.devcontainer/requirements.txt).
 """
 import argparse
 import os
@@ -19,11 +19,11 @@ from xc2064db import bitstream, config, shirriff  # noqa: E402
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("bitstreams", nargs="+", help=".rbt oder .bit")
-    ap.add_argument("-v", "--verbose", action="store_true", help="alle Abweichungen statt der ersten 10")
+    ap.add_argument("bitstreams", nargs="+", help=".rbt or .bit")
+    ap.add_argument("-v", "--verbose", action="store_true", help="all deviations instead of the first 10")
     args = ap.parse_args()
     if not shirriff.available():
-        sys.exit("xc2064shirriff: Python-Paket quickjs fehlt (pip install quickjs)")
+        sys.exit("xc2064shirriff: Python package quickjs is missing (pip install quickjs)")
     db = config.Database()
     dec = shirriff.Decoder()
     failed = 0
@@ -32,7 +32,7 @@ def main():
         n, bad = shirriff.compare(db, raw, dec.decode(shirriff.rbt_text(path)))
         counts = ", ".join("%d %s" % (v, k) for k, v in n.items())
         print("xc2064shirriff: %s: %s; %s" % (os.path.basename(path), counts,
-                                             "wie Shirriff" if not bad else "%d Abweichungen" % len(bad)),
+                                             "same as Shirriff" if not bad else "%d deviations" % len(bad)),
               file=sys.stderr)
         for b in bad if args.verbose else bad[:10]:
             print("  " + b, file=sys.stderr)

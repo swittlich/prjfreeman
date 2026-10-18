@@ -1,7 +1,7 @@
-// Blinky für das XC2064-Modell: 16-Bit-Zähler, die oberen 8 Bit auf LEDs.
-// Die Pins stehen in blinky.pcf (PLCC68-Pinnummern). Der Takt liegt an P9, dem Pin mit dem globalen
-// Taktpuffer GCLK -> K aller CLBs. Ohne Eintrag in der PCF-Datei entscheidet der Placer, den Takt legt
-// nextpnr dann selbst an P9.
+// Blinky for the XC2064 model: 16-bit counter, the upper 8 bits on LEDs.
+// The pins are in blinky.pcf (PLCC68 pin numbers). The clock is on P9, the pin with the global
+// clock buffer GCLK -> K of all CLBs. Without an entry in the PCF file the placer decides; nextpnr then
+// puts the clock on P9 by itself.
 module top (
 	input        clk,
 	input        rst,

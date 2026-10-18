@@ -1,6 +1,6 @@
-// UART-Sender 8N1: start übernimmt data und sendet Startbit, 8 Datenbits (LSB zuerst) und Stoppbit; ein Bit
-// dauert CLKS_PER_BIT Takte (Standard 434: 115200 Baud bei 50 MHz, beim XC2064 eher 9600 Baud bei 4,17 MHz).
-// busy ist 1, solange gesendet wird. Synchrones Reset rst.
+// UART transmitter 8N1: start latches data and sends a start bit, 8 data bits (LSB first) and a stop bit; one bit
+// lasts CLKS_PER_BIT clock cycles (default 434: 115200 baud at 50 MHz; on the XC2064 rather 9600 baud at 4.17 MHz).
+// busy is 1 while transmitting. Synchronous reset rst.
 module uart_tx #(
 	parameter CLKS_PER_BIT = 434
 ) (
@@ -12,9 +12,9 @@ module uart_tx #(
 	output           busy
 );
 	localparam W = $clog2(CLKS_PER_BIT);
-	reg [W-1:0] div;  // Takte im laufenden Bit
-	reg [3:0]   bitn; // 0: Startbit, 1-8: Datenbits, 9: Stoppbit
-	reg [7:0]   sh;   // noch zu sendende Datenbits
+	reg [W-1:0] div;  // clock cycles in the current bit
+	reg [3:0]   bitn; // 0: start bit, 1-8: data bits, 9: stop bit
+	reg [7:0]   sh;   // data bits still to be sent
 	reg         run;
 	assign busy = run;
 
@@ -31,7 +31,7 @@ module uart_tx #(
 				sh <= data;
 				bitn <= 0;
 				div <= 0;
-				tx <= 1'b0; // Startbit
+				tx <= 1'b0; // start bit
 			end
 		end else if (div != CLKS_PER_BIT - 1) begin
 			div <= div + 1'b1;
@@ -42,7 +42,7 @@ module uart_tx #(
 				tx <= 1'b1;
 			end else begin
 				bitn <= bitn + 1'b1;
-				tx <= bitn == 8 ? 1'b1 : sh[0]; // Datenbit bzw. Stoppbit
+				tx <= bitn == 8 ? 1'b1 : sh[0]; // data bit or stop bit
 				sh <= {1'b0, sh[7:1]};
 			end
 		end

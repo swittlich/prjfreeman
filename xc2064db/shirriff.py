@@ -1,21 +1,21 @@
-"""Gegenprobe mit Shirriffs Bitstream-Decoder: seine Skripte (external/shirriff-xc2064/html: draw.js,
-karnaugh.js, parse.js, iob.js, clb.js) laufen ohne Browser in QuickJS (Python-Paket quickjs), dekodieren eine
-RBT-Datei mit seinem eigenen Leser, und das Ergebnis wird mit der eigenen Dekodierung (config.decode, Tabellen
-aus iobmux/clbmux) verglichen.
+"""Cross-check with Shirriff's bitstream decoder: his scripts (external/shirriff-xc2064/html: draw.js,
+karnaugh.js, parse.js, iob.js, clb.js) run without a browser in QuickJS (Python package quickjs), decode an
+RBT file with his own reader, and the result is compared with our own decoding (config.decode, tables
+from iobmux/clbmux).
 
-Unabhängig ist vor allem das Innere der CLBs: Shirriff liest Wahrheitstabellen, Eingangsauswahl, Basis, X/Y,
-Speicherelement, Set/Reset und Takt direkt aus der Bit-Tabelle in Chip-Lage (eigene Bitreihenfolge der LUTs),
-das Paket über die Namen der Bitkarte. Die Muxe von CLB und IOB (Codes und Quellen) hat das Paket aus clb.js und
-iob.js übernommen; der Vergleich prüft hier die Übernahme (Code -> Quelle, G-Lage der Kreuzung). Pips,
-Switch-Verbindungen und Bidi-Bits lesen beide aus denselben Einträgen der Bitkarte (Namen der Matrizen
-verschieden, siehe unten).
+Above all, the interior of the CLBs is independent: Shirriff reads truth tables, input selection, base, X/Y,
+storage element, set/reset and clock directly from the bit table in chip layout (his own bit order of the LUTs),
+the package via the names of the bit map. The package took the CLB and IOB muxes (codes and sources) from clb.js
+and iob.js; here the comparison checks that transfer (code -> source, G position of the crossing). Pips,
+switch connections and bidi bits are read by both from the same entries of the bit map (the names of the
+matrices differ, see below).
 
-Bekannte Abweichungen, die der Vergleich berücksichtigt:
-  - Takt K oder G: Shirriff unterscheidet nach dem Bit CLK Invert, das Paket nach der Belegung des K-Mux (mit
-    TEST1.LCA belegt). Verglichen wird nur aus / über C (mit Umkehrung) / über K oder G.
-  - Switch-Matrizen der Zeile I: Shirriffs Klasse Switch vertauscht dort 8.1 und 8.2 (XACT benennt wie das
-    Paket).
-  - Bei Basis F und FGM liegt derselbe Ausgang an F und G; Shirriff nennt ihn F bzw. M, das Paket F und G.
+Known discrepancies that the comparison takes into account:
+  - Clock K or G: Shirriff distinguishes by the bit CLK Invert, the package by whether the K mux is used
+    (confirmed with TEST1.LCA). Only off / via C (with inversion) / via K or G is compared.
+  - Switch matrices of row I: Shirriff's class Switch swaps 8.1 and 8.2 there (XACT names them like the
+    package).
+  - With base F and FGM the same output is at F and G; Shirriff calls it F or M, the package F and G.
 """
 import json
 import os
@@ -24,7 +24,7 @@ from . import blocks, config, iobmux, sources
 
 JS_FILES = ("draw.js", "karnaugh.js", "parse.js", "iob.js", "clb.js")
 
-# Was die Skripte vom Browser brauchen, ohne Wirkung (Zeichnen und Seite werden nicht benutzt)
+# What the scripts need from the browser, without effect (drawing and the page are not used)
 STUBS = r"""
 var window = {};
 var debug = false;
@@ -39,7 +39,7 @@ function $() {
 $.get = function () {};
 """
 
-# Bitkarte laden wie loadConfig(), dekodieren wie rbtUpload(), Ergebnis als JSON
+# Load the bit map like loadConfig(), decode like rbtUpload(), result as JSON
 DRIVER = r"""
 function shirriffLoadDefs(text) {
   text.split(/\r?\n/).forEach(function (l) {
@@ -87,10 +87,10 @@ function shirriffDecode(rbtText) {
 
 
 class Decoder:
-    """Shirriffs Decoder in einem QuickJS-Kontext (einmal laden, beliebig oft dekodieren)"""
+    """Shirriff's decoder in a QuickJS context (load once, decode any number of times)"""
 
     def __init__(self):
-        import quickjs  # Python-Paket "quickjs" (.devcontainer/requirements.txt)
+        import quickjs  # Python package "quickjs" (.devcontainer/requirements.txt)
         self.ctx = quickjs.Context()
         self.ctx.eval(STUBS)
         html = os.path.join(sources.SHIRRIFF, "html")
@@ -101,7 +101,7 @@ class Decoder:
         self.ctx.eval("shirriffLoadDefs(defsText)")
 
     def decode(self, rbt_text):
-        """RBT-Text -> dict (clbs, iobs, pips, switches, bidi)"""
+        """RBT text -> dict (clbs, iobs, pips, switches, bidi)"""
         self.ctx.set("rbtText", rbt_text)
         return json.loads(self.ctx.eval("shirriffDecode(rbtText)"))
 
@@ -114,22 +114,22 @@ def available():
         return False
 
 
-# --- Vergleich -------------------------------------------------------------------------------------
+# --- Comparison ------------------------------------------------------------------------------------
 def _merged(base):
-    """Bei Basis F und FGM liegt an F und G derselbe Ausgang"""
+    """With base F and FGM, F and G carry the same output"""
     return base in ("F", "FGM")
 
 
 def _out(v, base):
-    """Ausgang (X, Y, Set-, Reset-Quelle) einheitlich: F/G/M bei verbundenem Ausgang als M"""
+    """Output (X, Y, set or reset source) normalized: F/G/M as M when the output is merged"""
     return "M" if _merged(base) and v in ("F", "G", "M") else v
 
 
 def _clk_ours(v):
-    """Takt des Pakets -> (Art, umgekehrt): aus, C (mit NOT), KG (K oder G, Umkehrung nicht vergleichbar)"""
+    """Clock of the package -> (kind, inverted): off, C (with NOT), KG (K or G, inversion not comparable)"""
     p = v.split(":") if v else []
     if not p or p[0] in ("NOT", "OFF"):
-        return ("aus", None)
+        return ("off", None)
     if p[0] == "C":
         return ("C", "NOT" in p)
     return ("KG", None)
@@ -138,48 +138,48 @@ def _clk_ours(v):
 def _clk_shirriff(v, base):
     p = v.split(":") if v else []
     if not p or p[0] == "NOT":
-        return ("aus", None)
+        return ("off", None)
     if p[0] == "C":
         return ("C", "NOT" in p)
     return ("KG", None)
 
 
 def compare(db, raw, sh):
-    """Shirriffs Dekodierung sh (Decoder.decode) gegen die eigene von raw. Ergebnis: (Zähler, Abweichungen)"""
+    """Shirriff's decoding sh (Decoder.decode) against our own of raw. Result: (counters, discrepancies)"""
     items, problems = config.decode(db, raw)
     if problems:
-        return {}, ["eigene Dekodierung: %s" % p for p in problems[:5]]
+        return {}, ["own decoding: %s" % p for p in problems[:5]]
     bad, n = [], {}
     clb = {it.name: blocks.parse_fields(it.value) for it in items if it.kind == "clb"}
 
-    # CLB: Inneres
+    # CLB: interior
     for t, f in sorted(clb.items()):
         s = sh["clbs"][t]
         base = f["BASE"]
         diff = []
         if s["base"] != base:
-            diff.append("Basis %s/%s" % (base, s["base"]))
+            diff.append("base %s/%s" % (base, s["base"]))
         sf = s["f"].split(":")
-        if base == "F":  # Shirriff: Eingang 1, B, Eingang 2, Eingang 3
+        if base == "F":  # Shirriff: input 1, B, input 2, input 3
             sf = [sf[0], sf[2], sf[3]]
         if sf != f["F"].split(":"):
-            diff.append("F-Eingänge %s/%s" % (f["F"], s["f"]))
+            diff.append("F inputs %s/%s" % (f["F"], s["f"]))
         if base != "F" and s["g"] != f["G"]:
-            diff.append("G-Eingänge %s/%s" % (f["G"], s["g"]))
+            diff.append("G inputs %s/%s" % (f["G"], s["g"]))
         if s["nf"] != int(f["LUTF"], 16) or s["ng"] != int(f["LUTG"], 16):
-            diff.append("Tabellen %s %s / %02X %02X" % (f["LUTF"], f["LUTG"], s["nf"], s["ng"]))
+            diff.append("tables %s %s / %02X %02X" % (f["LUTF"], f["LUTG"], s["nf"], s["ng"]))
         for k, sk in (("X", "x"), ("Y", "y"), ("SET", "set"), ("RES", "res")):
             if _out(f[k], base) != _out(s[sk], base):
                 diff.append("%s %s/%s" % (k, f[k], s[sk]))
         if f["Q"] != s["q"]:
             diff.append("Q %s/%s" % (f["Q"], s["q"]))
         if _clk_ours(f["CLK"]) != _clk_shirriff(s["clk"], base):
-            diff.append("Takt %s/%s" % (f["CLK"], s["clk"]))
+            diff.append("clock %s/%s" % (f["CLK"], s["clk"]))
         if diff:
             bad.append("CLB %s: %s" % (t, ", ".join(diff)))
     n["CLBs"] = len(clb)
 
-    # CLB-Eingangs-Muxe: G-Lage der gewählten Kreuzung
+    # CLB input muxes: G position of the selected crossing
     cnt = 0
     for name, m in sorted(db.muxes.items()):
         code, src = m.decode(raw)
@@ -189,16 +189,16 @@ def compare(db, raw, sh):
         cnt += 1
         if ours != g:
             bad.append("Mux %s: %s (%s) / %s" % (name, src.line if src else "none", ours, g))
-    n["CLB-Eingänge"] = cnt
+    n["CLB inputs"] = cnt
 
-    # IOBs: Eingang gelatcht, O-, T- und K-Mux (Index in der Liste aus iob.js, bei Leitungen auch die G-Lage)
+    # IOBs: input latched, O, T and K mux (index in the list from iob.js, for lines also the G position)
     latched = {it.name: blocks.parse_fields(it.value)["I"] == "Q" for it in items if it.kind == "iob"}
     cnt = 0
     for pin, iob in sorted(db.iobs.items(), key=lambda kv: int(kv[0][1:])):
         s = sh["iobs"][pin]
         cnt += 1
         if bool(s["latch"]) != latched[pin]:
-            bad.append("IOB %s: gelatcht %s/%s" % (pin, latched[pin], s["latch"]))
+            bad.append("IOB %s: latched %s/%s" % (pin, latched[pin], s["latch"]))
         c = iobmux.code(iob.obits, raw)
         _cmp_sel(bad, pin + ".O", iob.o, iob.omux.get(c), s["o"])
         c = iobmux.code(iob.tbits, raw)
@@ -208,29 +208,29 @@ def compare(db, raw, sh):
                 bad.append("IOB %s.T: %s/%s" % (pin, "off" if want == "" else "on", s["tmode"]))
         else:
             if s["tmode"] != "TRI":
-                bad.append("IOB %s.T: Tristate/%s" % (pin, s["tmode"]))
+                bad.append("IOB %s.T: tristate/%s" % (pin, s["tmode"]))
             _cmp_sel(bad, pin + ".T", iob.t, iob.tmux.get(c), s["t"])
     for pin, km in sorted(db.kmuxes.items()):
         _cmp_sel(bad, pin + ".K", km.sources, km.codes.get(iobmux.code(km.bits, raw)), sh["iobs"][pin]["k"])
     n["IOBs"] = cnt
-    n["K-Muxe"] = len(db.kmuxes)
+    n["K muxes"] = len(db.kmuxes)
 
-    # Pips, Switch-Verbindungen, Puffer: dieselben Bits, Namen der Matrizen verglichen
+    # pips, switch connections, buffers: the same bits, names of the matrices compared
     ours_pips = {e.key[0] for e in db.entries if e.kind == "pip" and raw[e.index] == 0}
     if ours_pips != set(sh["pips"]):
-        bad.append("Pips: nur hier %s, nur bei Shirriff %s" % (sorted(ours_pips - set(sh["pips"]))[:5],
-                                                              sorted(set(sh["pips"]) - ours_pips)[:5]))
+        bad.append("Pips: only here %s, only in Shirriff %s" % (sorted(ours_pips - set(sh["pips"]))[:5],
+                                                               sorted(set(sh["pips"]) - ours_pips)[:5]))
     n["Pips"] = len(ours_pips)
     ours_sw = {"%s %s" % (it.name, it.value) for it in items if it.kind == "switch"}
     sh_sw = set()
     for name, a, b in sh["switches"]:
-        if name[0] == "I":  # Zeile I: Shirriff vertauscht 8.1 und 8.2
+        if name[0] == "I":  # row I: Shirriff swaps 8.1 and 8.2
             name = name[:-1] + {"1": "2", "2": "1"}[name[-1]]
         sh_sw.add("%s %d-%d" % (name, min(a, b), max(a, b)))
     if ours_sw != sh_sw:
-        bad.append("Switch-Verbindungen: nur hier %s, nur bei Shirriff %s" % (sorted(ours_sw - sh_sw)[:5],
-                                                                             sorted(sh_sw - ours_sw)[:5]))
-    n["Switch-Verbindungen"] = len(ours_sw)
+        bad.append("Switch connections: only here %s, only in Shirriff %s" % (sorted(ours_sw - sh_sw)[:5],
+                                                                            sorted(sh_sw - ours_sw)[:5]))
+    n["switch connections"] = len(ours_sw)
     ours_bidi = {e.key[0] for e in db.entries if e.kind == "bidi" and raw[e.index] == 0}
     if ours_bidi != set(sh["bidi"]):
         bad.append("Bidi: %d/%d" % (len(ours_bidi), len(sh["bidi"])))
@@ -238,19 +238,19 @@ def compare(db, raw, sh):
 
 
 def _cmp_sel(bad, name, entries, idx, s):
-    """Gewählte Quelle eines IOB-Mux: Index in der Liste, bei einer Leitung auch die G-Lage"""
+    """Selected source of an IOB mux: index in the list, for a line also the G position"""
     if idx is None and s is None:
         return
     if idx is None or s is None or idx != s[0]:
-        bad.append("IOB %s: Quelle %s/%s" % (name, idx, s and s[0]))
+        bad.append("IOB %s: source %s/%s" % (name, idx, s and s[0]))
         return
     ent = entries[idx]
     if ent.kind == "route" and ent.g != s[1]:
-        bad.append("IOB %s: %s bei %s, Shirriff %s (%s)" % (name, ent.line, ent.g, s[1], s[2]))
+        bad.append("IOB %s: %s at %s, Shirriff %s (%s)" % (name, ent.line, ent.g, s[1], s[2]))
 
 
 def rbt_text(path):
-    """Text einer RBT-Datei; .BIT (binär) wird über bitstream.write_rbt in die Textform gebracht"""
+    """Text of an RBT file; a .BIT (binary) is converted to text form via bitstream.write_rbt"""
     from . import bitstream
     if path.upper().endswith(".RBT"):
         return sources.read_text(path)

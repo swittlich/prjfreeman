@@ -1,4 +1,4 @@
-# Pin-Zuordnung für latch_sr.v: set_io <Port> <PLCC68-Pin>
+# Pin assignment for latch_sr.v: set_io <port> <PLCC68 pin>
 set_io clk  P9
 set_io en   P8
 set_io set  P7

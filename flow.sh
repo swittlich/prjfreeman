@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Kompletter Flow für xc2064: yosys (synth_xc2064) -> nextpnr-himbaechel --device XC2064
-#   flow.sh [design.v] [weitere nextpnr-Optionen, z.B. --gui]
-# Pins: design.pcf neben design.v (set_io <Port> <Pin>) wird automatisch verwendet.
-# Umgebungsvariablen: YOSYS=..., NEXTPNR=... (z.B. Debug-Binaries aus build/*-debug), PCF=... (andere
-# PCF-Datei), SEED=... (Seed für nextpnr, ohne SEED der nextpnr-Standard), FREQ=... (Timing-Ziel in
-# MHz, Standard 5)
+# Complete flow for xc2064: yosys (synth_xc2064) -> nextpnr-himbaechel --device XC2064
+#   flow.sh [design.v] [further nextpnr options, e.g. --gui]
+# Pins: design.pcf next to design.v (set_io <port> <pin>) is used automatically.
+# Environment variables: YOSYS=..., NEXTPNR=... (e.g. debug binaries from build/*-debug), PCF=... (other
+# PCF file), SEED=... (seed for nextpnr, without SEED the nextpnr default), FREQ=... (timing target in
+# MHz, default 5)
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/../../scripts/lib.sh"
 
@@ -19,24 +19,24 @@ OUT="$FAT_BUILD/flows/xc2064"
 PCF="${PCF:-${DESIGN%.v}.pcf}"
 PCF_OPT=()
 [[ -f "$PCF" ]] && PCF_OPT=(--vopt "pcf=$PCF")
-# Seed: ohne SEED der nextpnr-Standard, SEED=n übergibt --seed n. Ein --seed in den weitergereichten
-# Optionen hat Vorrang (nextpnr lehnt ein doppeltes --seed ab).
+# Seed: without SEED the nextpnr default, SEED=n passes --seed n. A --seed in the passed-through
+# options takes precedence (nextpnr rejects a duplicate --seed).
 SEED_OPT=()
 [[ -n "${SEED:-}" ]] && SEED_OPT=(--seed "$SEED")
 for a in "$@"; do [[ "$a" == --seed || "$a" == --seed=* ]] && SEED_OPT=(); done
 BASE="$OUT/$(basename "${DESIGN%.v}")"
 mkdir -p "$OUT"
 
-log "Baue yosys-Plugin"
+log "Building yosys plugin"
 make -s -C "$HERE/yosys"
 
-log "Synthese: $DESIGN"
+log "Synthesis: $DESIGN"
 "$YOSYS" -q -l "$BASE.yosys.log" -m "$HERE/yosys/build/xc2064.so" \
 	-p "synth_xc2064 -json $BASE.json" "$DESIGN"
 
-# Timing-Ziel: zeitgemäße Taktfrequenz (MHz). Ein 16-Bit-Zähler ohne Carry-Logik schafft ~6 MHz.
+# Timing target: a period-appropriate clock frequency (MHz). A 16-bit counter without carry logic reaches ~6 MHz.
 log "Place & Route: nextpnr-himbaechel --device XC2064 --freq ${FREQ:-5} ${SEED_OPT[*]} ${PCF_OPT[*]}"
 "$NEXTPNR" --device XC2064 --json "$BASE.json" --write "$BASE.pnr.json" -l "$BASE.nextpnr.log" \
 	--freq "${FREQ:-5}" "${SEED_OPT[@]}" "${PCF_OPT[@]}" "$@"
 
-log "Ergebnisse: $OUT"
+log "Results: $OUT"

@@ -13,9 +13,9 @@ set(HIMBAECHEL_XC2064_DEVICES ${ALL_HIMBAECHEL_XC2064_DEVICES} CACHE STRING
     "Include support for these Xc2064 devices (available: ${ALL_HIMBAECHEL_XC2064_DEVICES})")
 message(STATUS "Enabled Himbaechel-Xc2064 devices: ${HIMBAECHEL_XC2064_DEVICES}")
 
-# Datenquellen des Generators in arch/xc2064 (über den Symlink in upstream/nextpnr aufgelöst): das Paket
-# xc2064db und Shirriffs Dateien im Submodule external/shirriff-xc2064. Ändert sich eine davon, entsteht
-# die Chipdb neu.
+# Data sources of the generator in arch/xc2064 (resolved via the symlink in upstream/nextpnr): the package
+# xc2064db and Shirriff's files in the submodule external/shirriff-xc2064. If one of them changes, the
+# chipdb is regenerated.
 get_filename_component(XC2064_NEXTPNR_DIR ${CMAKE_CURRENT_SOURCE_DIR} REALPATH)
 get_filename_component(XC2064_ARCH_DIR ${XC2064_NEXTPNR_DIR} DIRECTORY)
 file(GLOB XC2064_DB_SOURCES CONFIGURE_DEPENDS ${XC2064_ARCH_DIR}/xc2064db/*.py)

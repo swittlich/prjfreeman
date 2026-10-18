@@ -1,5 +1,5 @@
-# Pin-Zuordnung für ampel.v: set_io <Port> <PLCC68-Pin>
-# Takt, Reset und Taster oben, die Lampen rechts
+# Pin assignment for ampel.v: set_io <port> <PLCC68 pin>
+# Clock, reset and push button at the top, the lamps on the right
 set_io clk     P9
 set_io rst     P8
 set_io req     P7

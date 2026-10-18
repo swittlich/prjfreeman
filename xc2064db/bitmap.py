@@ -1,8 +1,8 @@
-"""XC2064-def.txt: Art und Felder jedes der 11.360 Konfigurationsbits.
+"""XC2064-def.txt: kind and fields of each of the 11,360 configuration bits.
 
-Bit i liegt in Rahmen i // 71 an Stelle i % 71, das ist Zeile i // 71 der RBT-Datei (parse.js). Wie in
-Shirriffs Decoder (parse.js, clb.js, iob.js) ist ein Bit programmiert, wenn es 0 ist. Die kodierten
-Multiplexer (CLB-Eingänge, IOB, Taktpuffer) lesen dagegen den Rohwert: Bit n hat die Wertigkeit 2^n.
+Bit i lies in frame i // 71 at position i % 71, that is line i // 71 of the RBT file (parse.js). As in
+Shirriff's decoder (parse.js, clb.js, iob.js), a bit is programmed when it is 0. The encoded
+multiplexers (CLB inputs, IOB, clock buffers), on the other hand, read the raw value: bit n has the weight 2^n.
 """
 import collections
 import re
@@ -12,17 +12,17 @@ from . import sources
 FRAMES, FRAME_BITS = 160, 71
 NBITS = FRAMES * FRAME_BITS
 
-# kind und key je Art:
+# kind and key per kind:
 #   unused  ()
-#   pip     (g,)              G-Koordinate der Kreuzung zweier Leitungen, z. B. "170G23"
-#   switch  (g, p1, p2)       Lage einer Switch-Matrix (Magic-Bit), verbundene Pins 1-8
-#   bidi    (g,)              Bedeutung offen (Shirriff dekodiert sie nicht)
-#   clbmux  (tile, pin, n)    Eingangs-Mux A, B, C, D oder K einer CLB, Bit n
-#   clkmux  (buffer, n)       Eingang der Taktpuffer CLK.AA.I (GCLK) und CLK.II.I (ACLK), Bit n
-#   iobmux  (pad, pin, n)     O-, T- oder K-Mux eines IOB; das unbenannte "IOB Pnn" ist T-Bit 0 (iob.js)
-#   clb     (tile, name)      übrige CLB-Bits (Logic Table, FF, X/Y ...), name wie in der Datei
-#   iob     (pad, name)       übrige IOB-Bits ("I PAD/Latched")
-#   other   (name,)           Readback, TTL/CMOS, DONE-Pullup, unbekannte
+#   pip     (g,)              G coordinate of the crossing of two lines, e.g. "170G23"
+#   switch  (g, p1, p2)       position of a switch matrix (Magic bit), connected pins 1-8
+#   bidi    (g,)              meaning unresolved (Shirriff does not decode them)
+#   clbmux  (tile, pin, n)    input mux A, B, C, D or K of a CLB, bit n
+#   clkmux  (buffer, n)       input of the clock buffers CLK.AA.I (GCLK) and CLK.II.I (ACLK), bit n
+#   iobmux  (pad, pin, n)     O, T or K mux of an IOB; the unnamed "IOB Pnn" is T bit 0 (iob.js)
+#   clb     (tile, name)      remaining CLB bits (Logic Table, FF, X/Y ...), name as in the file
+#   iob     (pad, name)       remaining IOB bits ("I PAD/Latched")
+#   other   (name,)           Readback, TTL/CMOS, DONE pull-up, unknown ones
 Entry = collections.namedtuple("Entry", "index text kind key")
 
 _RULES = [
@@ -45,12 +45,12 @@ def _classify(text):
         m = re.fullmatch(pattern, text)
         if m:
             return kind, key(m)
-    raise ValueError("unbekannter Eintrag in XC2064-def.txt: %r" % text)
+    raise ValueError("unknown entry in XC2064-def.txt: %r" % text)
 
 
 def load(path=sources.DEF_TXT):
-    """Liste der 11.360 Einträge, Index = Bitnummer. Die Datei endet mit Bit 11.357; fehlende Bits gelten wie
-    in parse.js als unbenutzt (Text "(fehlt)", siehe missing())."""
+    """List of the 11,360 entries, index = bit number. The file ends with bit 11,357; as in parse.js, missing
+    bits are treated as unused (text "(missing)", see missing())."""
     entries = [None] * NBITS
     for line in sources.read_text(path).splitlines():
         m = re.match(r"Bit:\s+([0-9A-F]+)\s+(.*)", line)
@@ -59,14 +59,14 @@ def load(path=sources.DEF_TXT):
         i, text = int(m[1], 16), m[2].strip()
         kind, key = _classify(text)
         entries[i] = Entry(i, text, kind, key)
-    return [e or Entry(i, "(fehlt)", "unused", ()) for i, e in enumerate(entries)]
+    return [e or Entry(i, "(missing)", "unused", ()) for i, e in enumerate(entries)]
 
 
 def missing(entries):
-    return [e.index for e in entries if e.text == "(fehlt)"]
+    return [e.index for e in entries if e.text == "(missing)"]
 
 
 def duplicates(entries):
-    """Einträge (außer NOT USED), deren Text mehrfach vorkommt; leer, wenn jeder Name eindeutig ist"""
+    """Entries (except NOT USED) whose text occurs more than once; empty if every name is unique"""
     count = collections.Counter(e.text for e in entries if e.kind != "unused")
     return sorted(t for t, n in count.items() if n > 1)

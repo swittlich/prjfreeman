@@ -1,6 +1,6 @@
-"""Pfade der Submodules (unter external/) und Lesen ihrer Dateien. Pfade hängen an os.path.realpath(__file__),
-damit das Paket auch über den Symlink in upstream/nextpnr gefunden wird. Zeilenenden (CRLF in Shirriffs
-Dateien) werden vereinheitlicht."""
+"""Paths of the submodules (under external/) and reading their files. Paths are based on
+os.path.realpath(__file__), so that the package is also found via the symlink in upstream/nextpnr. Line endings
+(CRLF in Shirriff's files) are normalized."""
 import hashlib
 import os
 
@@ -21,23 +21,23 @@ OPENXC_GENERATOR = os.path.join(OPENXC, "bitstream", "generate_bitstream.py")
 OPENXC_XACT_DIR = os.path.join(OPENXC, "bitstream", "XACT_comparisons")
 OPENXC_AND_OR = os.path.join(OPENXC, "hardware", "bitstreams", "AND_OR.BIT")
 
-# alle mit XACT erzeugten Bitstreams (Gegenproben)
+# all bitstreams generated with XACT (cross-checks)
 XACT_BITSTREAMS = [TEST1_RBT, OPENXC_AND_OR] + sorted(
     os.path.join(OPENXC_XACT_DIR, f) for f in (os.listdir(OPENXC_XACT_DIR) if os.path.isdir(OPENXC_XACT_DIR) else [])
     if f.upper().endswith(".BIT"))
 
-# Dateien, aus denen der Generator die Chipdb baut (für die INPUTS in CMakeLists.txt)
+# files from which the generator builds the chipdb (for the INPUTS in CMakeLists.txt)
 GENERATOR_INPUTS = [DEF_TXT, DRAW_JS, CLB_JS, IOB_JS]
 
 
 def read_text(path):
-    """Datei als Text mit \\n als Zeilenende. Fehlt sie, fehlt meist das Submodule."""
+    """File as text with \\n as line ending. If it is missing, the submodule is usually missing."""
     if not os.path.exists(path):
-        raise FileNotFoundError("%s fehlt (git submodule update --init in arch/xc2064?)" % path)
+        raise FileNotFoundError("%s is missing (git submodule update --init in arch/xc2064?)" % path)
     with open(path, "rb") as f:
         return f.read().decode("latin-1").replace("\r\n", "\n").replace("\r", "\n")
 
 
 def text_sha1(path):
-    """SHA-1 des Texts ohne Rücksicht auf Zeilenenden (Kopien mit und ohne CRLF gelten als gleich)"""
+    """SHA-1 of the text regardless of line endings (copies with and without CRLF count as equal)"""
     return hashlib.sha1(read_text(path).encode("latin-1")).hexdigest()

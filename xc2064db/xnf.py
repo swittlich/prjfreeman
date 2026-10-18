@@ -1,33 +1,33 @@
-"""XNF-Netzliste (Xilinx Netlist Format) für XACTs XC2000-Ablauf aus einer flachen yosys-JSON-Netzliste
-(tools/xc2064xnf). XACT macht daraus mit XNFMERGE, XNFPREP, XNFMAP und MAP2LCA eine unplatzierte LCA-Datei;
-die Abbildung auf CLBs und IOBs ist also die von XNFMAP, nicht die von synth_xc2064.
+"""XNF netlist (Xilinx Netlist Format) for XACT's XC2000 flow from a flat yosys JSON netlist
+(tools/xc2064xnf). XACT turns it into an unplaced LCA file with XNFMERGE, XNFPREP, XNFMAP and MAP2LCA;
+the mapping onto CLBs and IOBs is therefore that of XNFMAP, not that of synth_xc2064.
 
-Benutzt werden nur Symbole aus XACT\\DATA\\XLXLGL2K.XNF (erlaubte Symbole der XC2000-Familie):
+Only symbols from XACT\\DATA\\XLXLGL2K.XNF (allowed symbols of the XC2000 family) are used:
 
 | yosys | XNF |
 |---|---|
-| `$_AND_` `$_NAND_` `$_OR_` `$_NOR_` `$_XOR_` `$_XNOR_` | gleichnamiges Gatter, Eingänge 1, 2, Ausgang O |
-| `$_ANDNOT_` `$_ORNOT_` | AND bzw. OR, Eingang 2 mit INV |
-| `$_NOT_` `$_BUF_` | INV bzw. BUF (I, O) |
-| `$lut` (bis 4 Eingänge), `$_MUX_`, `$_NMUX_`, `$_AOI3_` ... `$_OAI4_` | EQN (I0-I3, minimierte Summe von Produkten) |
-| `$_DFF_P_`/`N_`, `$_DFFSR_PPP_`/`NPP_` | DFF (D, C, RD, SD, Q); negative Flanke: C mit INV |
-| `$_DLATCH_P_`/`N_`, `$_DLATCHSR_PPP_`/`NPP_` | DLAT (D, G, RD, SD, Q); G mit INV bei `_N_` |
-| Eingang, Ausgang, `$_TBUF_` am Ausgang | EXT mit IBUF (I), OBUF (O), OBUFT (T, T = nicht E) bzw. OBUFT und IBUF (B) |
-| Takt aus einem Pad, der nur Speicherelemente taktet | IBUF und GCLK (der zweite: ACLK) |
-| mit iobff: FF als einziger Leser eines Eingangs, steigende Flanke, ohne Set/Reset | INFF (D am Pad, C, Q) |
+| `$_AND_` `$_NAND_` `$_OR_` `$_NOR_` `$_XOR_` `$_XNOR_` | gate of the same name, inputs 1, 2, output O |
+| `$_ANDNOT_` `$_ORNOT_` | AND or OR, input 2 with INV |
+| `$_NOT_` `$_BUF_` | INV or BUF (I, O) |
+| `$lut` (up to 4 inputs), `$_MUX_`, `$_NMUX_`, `$_AOI3_` ... `$_OAI4_` | EQN (I0-I3, minimized sum of products) |
+| `$_DFF_P_`/`N_`, `$_DFFSR_PPP_`/`NPP_` | DFF (D, C, RD, SD, Q); negative edge: C with INV |
+| `$_DLATCH_P_`/`N_`, `$_DLATCHSR_PPP_`/`NPP_` | DLAT (D, G, RD, SD, Q); G with INV for `_N_` |
+| input, output, `$_TBUF_` at the output | EXT with IBUF (I), OBUF (O), OBUFT (T, T = not E) or OBUFT and IBUF (B) |
+| clock from a pad that clocks only storage elements | IBUF and GCLK (the second one: ACLK) |
+| with iobff: FF as the only reader of an input, rising edge, no set/reset | INFF (D at the pad, C, Q) |
 
-Netze: Pads heißen wie die Ports (`LEDS<0>`, Busse wie bei Xilinx mit spitzen Klammern), der Ausgang ihres IBUF
-`<Pad>_I`, der eines Taktpuffers `<Pad>_GCLK` bzw. `<Pad>_ACLK`. Interne Netze heißen nach dem kürzesten
-öffentlichen Namen in yosys (Hierarchie mit `/`), sonst `$N<Bit>`. Konstanten sind die Netze GND und VCC (PWR).
+Nets: pads are named like the ports (`LEDS<0>`, buses with angle brackets as with Xilinx), the output of their
+IBUF `<Pad>_I`, that of a clock buffer `<Pad>_GCLK` or `<Pad>_ACLK`. Internal nets are named after the shortest
+public name in yosys (hierarchy with `/`), otherwise `$N<Bit>`. Constants are the nets GND and VCC (PWR).
 """
 import re
 
-# yosys-Gatter -> (XNF-Symbol, umgekehrte Eingänge)
+# yosys gate -> (XNF symbol, inverted inputs)
 GATES = {
     "$_AND_": ("AND", ""), "$_NAND_": ("NAND", ""), "$_OR_": ("OR", ""), "$_NOR_": ("NOR", ""),
     "$_XOR_": ("XOR", ""), "$_XNOR_": ("XNOR", ""), "$_ANDNOT_": ("AND", "B"), "$_ORNOT_": ("OR", "B"),
 }
-# Zellen ohne passendes Gatter: Eingänge und Funktion, geschrieben als EQN
+# cells without a matching gate: inputs and function, written as EQN
 FUNCS = {
     "$_MUX_": ("ABS", lambda a, b, s: b if s else a),
     "$_NMUX_": ("ABS", lambda a, b, s: not (b if s else a)),
@@ -36,7 +36,7 @@ FUNCS = {
     "$_AOI4_": ("ABCD", lambda a, b, c, d: not ((a and b) or (c and d))),
     "$_OAI4_": ("ABCD", lambda a, b, c, d: not ((a or b) and (c or d))),
 }
-# Speicherelemente nach dfflegalize wie in synth_xc2064: yosys-Zelle -> (Symbol, Takt- bzw. Gate-Port, negiert)
+# storage elements after dfflegalize as in synth_xc2064: yosys cell -> (symbol, clock or gate port, inverted)
 STORAGE = {
     "$_DFF_P_": ("DFF", "C", False), "$_DFF_N_": ("DFF", "C", True),
     "$_DFFSR_PPP_": ("DFF", "C", False), "$_DFFSR_NPP_": ("DFF", "C", True),
@@ -48,9 +48,9 @@ IGNORED = {"$scopeinfo"}
 
 
 def yosys_script(top, lut, json_file):
-    """yosys-Befehle (mit ; getrennt) für eine Netzliste, die write übersetzen kann: flach, Speicherelemente wie
-    bei synth_xc2064 (FF oder Latch, Takt beliebiger Polarität, asynchrones Set/Reset, nach dem Laden 0),
-    Logik als einfache Gatter, mit lut als LUTs mit bis zu 4 Eingängen (ABC)"""
+    """yosys commands (separated by ;) for a netlist that write can translate: flat, storage elements as in
+    synth_xc2064 (FF or latch, clock of either polarity, asynchronous set/reset, 0 after loading), logic as
+    simple gates, with lut as LUTs with up to 4 inputs (ABC)"""
     return "; ".join([
         "hierarchy -check " + ("-top " + top if top else "-auto-top"),
         "proc", "flatten", "tribuf -logic", "deminout",
@@ -64,7 +64,7 @@ def yosys_script(top, lut, json_file):
 
 
 def read_pcf(text):
-    """set_io <Port> <Pin> -> {Port: Pin}, Port wie in Verilog (leds[0]); Optionen mit - werden übergangen"""
+    """set_io <port> <pin> -> {port: pin}, port as in Verilog (leds[0]); options starting with - are skipped"""
     pins = {}
     for n, line in enumerate(text.splitlines(), 1):
         words = line.split("#")[0].split()
@@ -72,23 +72,23 @@ def read_pcf(text):
             continue
         args = [w for w in words[1:] if not w.startswith("-")]
         if words[0] != "set_io" or len(args) != 2:
-            raise ValueError("PCF Zeile %d: erwartet set_io <Port> <Pin>" % n)
+            raise ValueError("PCF line %d: expected set_io <port> <pin>" % n)
         pins[args[0]] = args[1]
     return pins
 
 
 def top_module(netlist, top=None):
-    """(Name, Modul) des obersten Moduls einer yosys-JSON-Netzliste"""
+    """(name, module) of the top module of a yosys JSON netlist"""
     modules = netlist["modules"]
     if top:
         if top not in modules:
-            raise ValueError("Modul %s fehlt in der Netzliste" % top)
+            raise ValueError("module %s is missing from the netlist" % top)
         return top, modules[top]
     tops = [m for m, mod in modules.items() if _int(mod.get("attributes", {}).get("top", 0))]
     if len(tops) != 1:
         tops = list(modules) if len(modules) == 1 else tops
     if len(tops) != 1:
-        raise ValueError("oberstes Modul unklar (%s), --top angeben" % ", ".join(sorted(modules)))
+        raise ValueError("top module ambiguous (%s), specify --top" % ", ".join(sorted(modules)))
     return tops[0], modules[tops[0]]
 
 
@@ -97,13 +97,13 @@ def _int(v):
 
 
 def _clean(name):
-    """yosys-Name -> XNF-Name: groß, Hierarchie mit /, Bitindex mit <>, sonst nur A-Z 0-9 _ $"""
+    """yosys name -> XNF name: upper case, hierarchy with /, bit index with <>, otherwise only A-Z 0-9 _ $"""
     name = name.lstrip("\\").upper().replace(".", "/").replace("[", "<").replace("]", ">")
     return re.sub(r"[^A-Z0-9_$/<>]", "_", name)
 
 
 def _bit_names(name, entry):
-    """Name jedes Bits eines Ports oder Netzes (Busse mit Index, Richtung und Versatz wie im Verilog)"""
+    """Name of each bit of a port or net (buses with index, direction and offset as in the Verilog)"""
     bits = entry["bits"]
     if len(bits) == 1:
         return [name]
@@ -112,7 +112,7 @@ def _bit_names(name, entry):
 
 
 def _sop(n, ones):
-    """Minterme ones über n Eingänge -> Primimplikanten (Wert, Maske der freien Eingänge), gierig überdeckt"""
+    """Minterms ones over n inputs -> prime implicants (value, mask of the free inputs), covered greedily"""
     terms, primes = {(m, 0) for m in ones}, set()
     while terms:
         merged, nxt = set(), set()
@@ -137,12 +137,12 @@ class _Writer:
         self.module = module
         self.cells = {n: c for n, c in module.get("cells", {}).items() if c["type"] not in IGNORED}
         self.nets, self.syms = {"GND", "VCC"}, set()
-        self.consts = set()           # benutzte Konstanten (0, 1)
-        self.alias = {}               # Bit -> "0"/"1" für Zellen mit konstantem Ausgang
-        self.sink_net = {}            # Bit eines Eingangs -> Netz, das die Logik liest (IBUF bzw. Taktpuffer)
+        self.consts = set()           # used constants (0, 1)
+        self.alias = {}               # bit -> "0"/"1" for cells with a constant output
+        self.sink_net = {}            # bit of an input -> net that the logic reads (IBUF or clock buffer)
         self.internal = {}
         self.body, self.ext = [], []
-        self.stats = {"Gatter": 0, "EQN": 0, "FFs": 0, "Latches": 0, "IOB-FFs": 0, "Pads": 0}
+        self.stats = {"gates": 0, "EQN": 0, "FFs": 0, "Latches": 0, "IOB-FFs": 0, "Pads": 0}
         self.clkbufs = []
         self._check_cells()
         self._names()
@@ -150,15 +150,15 @@ class _Writer:
         self._clocks(clkbuf, gclk, aclk)
         self.inff = self._iobffs() if iobff else {}
 
-    # Prüfen und Zusammenhänge
+    # Checks and connectivity
 
     def _check_cells(self):
         bad = sorted({c["type"] for c in self.cells.values()
                       if c["type"] not in GATES and c["type"] not in FUNCS and c["type"] not in STORAGE
                       and c["type"] not in ("$_NOT_", "$_BUF_", "$lut", "$_TBUF_")})
         if bad:
-            raise ValueError("Zellen ohne XNF-Gegenstück: %s (Netzliste flach und mit dem Skript von "
-                             "xc2064xnf synthetisieren)" % ", ".join(bad))
+            raise ValueError("cells without an XNF counterpart: %s (synthesize the netlist flat and with the "
+                             "script of xc2064xnf)" % ", ".join(bad))
         self.drivers, self.sinks = {}, {}
         for name, c in self.cells.items():
             for port, bits in c["connections"].items():
@@ -170,7 +170,7 @@ class _Writer:
                         self.sinks.setdefault(b, []).append((name, port))
             if c["type"] == "$lut":
                 if _int(c["parameters"]["WIDTH"]) > 4:
-                    raise ValueError("LUT %s hat mehr als 4 Eingänge" % name)
+                    raise ValueError("LUT %s has more than 4 inputs" % name)
                 table = self._lut_table(c)
                 if len(set(table)) == 1:
                     self.alias[c["connections"]["Y"][0]] = "1" if table[0] else "0"
@@ -182,7 +182,7 @@ class _Writer:
         return [value >> k & 1 for k in range(1 << width)]
 
     def _names(self):
-        """Kandidaten für interne Netznamen: öffentliche Namen außer Ports, kürzester zuerst"""
+        """Candidates for internal net names: public names except ports, shortest first"""
         ports = self.module["ports"]
         self.cands, self.port_cands = {}, {}
         for name, entry in self.module.get("netnames", {}).items():
@@ -202,10 +202,10 @@ class _Writer:
         return name
 
     def net(self, b):
-        """Netzname, den die Logik für Bit b liest"""
+        """Net name that the logic reads for bit b"""
         b = self.alias.get(b, b)
         if isinstance(b, str):
-            v = "1" if b == "1" else "0"     # x und z werden 0
+            v = "1" if b == "1" else "0"     # x and z become 0
             self.consts.add(v)
             return "VCC" if v == "1" else "GND"
         if b in self.sink_net:
@@ -227,7 +227,7 @@ class _Writer:
     # Pads
 
     def _ports(self, pins):
-        self.inputs, self.outputs = [], []     # (Pad, Bit, Port-Name wie in Verilog)
+        self.inputs, self.outputs = [], []     # (pad, bit, port name as in Verilog)
         tbufs = {c["connections"]["Y"][0]: n for n, c in self.cells.items() if c["type"] == "$_TBUF_"}
         port_bits = set()
         for name, p in self.module["ports"].items():
@@ -240,21 +240,21 @@ class _Writer:
                 else:
                     self.outputs.append((pad, b, label, loc))
         if pins:
-            raise ValueError("PCF nennt Ports, die es nicht gibt: %s" % ", ".join(sorted(pins)))
+            raise ValueError("PCF names ports that do not exist: %s" % ", ".join(sorted(pins)))
         self.tbufs = tbufs
         for b, cell in tbufs.items():
             if b not in port_bits:
-                raise ValueError("Tristate-Puffer %s treibt keinen Port (tribuf -logic fehlt?)" % cell)
+                raise ValueError("tristate buffer %s drives no port (tribuf -logic missing?)" % cell)
 
     def _clocks(self, clkbuf, gclk, aclk):
-        """Taktpuffer: GCLK und ACLK je für einen Eingang (Standard: die beiden Eingänge, die nur Takte von
-        Speicherelementen treiben, mit den meisten Senken)"""
+        """Clock buffers: GCLK and ACLK, each for one input (default: the two inputs that drive only clocks of
+        storage elements, with the most sinks)"""
         self.buffered = {}
         by_label = {label: b for _, b, label, _ in self.inputs}
         for buf, label in (("GCLK", gclk), ("ACLK", aclk)):
             if label:
                 if label not in by_label:
-                    raise ValueError("--%s: kein Eingang %s" % (buf.lower(), label))
+                    raise ValueError("--%s: no input %s" % (buf.lower(), label))
                 self.buffered[by_label[label]] = buf
         if not clkbuf:
             return
@@ -271,8 +271,8 @@ class _Writer:
             self.buffered[b] = buf
 
     def _iobffs(self):
-        """{Bit eines Eingangs: FF} für FFs, die wie bei xc2064_iobff ins IOB gehen (INFF): einziger Leser des
-        Eingangs, steigende Flanke, kein Set/Reset"""
+        """{bit of an input: FF} for FFs that go into the IOB as with xc2064_iobff (INFF): only reader of the
+        input, rising edge, no set/reset"""
         inff = {}
         out_bits = {b for _, b, _, _ in self.outputs}
         for _, b, _, _ in self.inputs:
@@ -286,7 +286,7 @@ class _Writer:
                 inff[b] = name
         return inff
 
-    # Ausgabe
+    # Output
 
     def sym(self, name, kind, pins, params=""):
         self.body.append("SYM, %s, %s%s" % (self._unique(name, self.syms), kind, ", " + params if params else ""))
@@ -295,7 +295,7 @@ class _Writer:
         self.body.append("END")
 
     def _eqn(self, out, inputs, table):
-        """EQN aus der Wahrheitstabelle (Eintrag k: Ausgang bei Eingängen = Bits von k)"""
+        """EQN from the truth table (entry k: output for inputs = bits of k)"""
         cover = _sop(len(inputs), [k for k, v in enumerate(table) if v])
         used = sorted({i for value, mask in cover for i in range(len(inputs)) if not mask >> i & 1})
         terms = ["*".join(("I%d" if value >> i & 1 else "~I%d") % i for i in range(len(inputs))
@@ -312,12 +312,12 @@ class _Writer:
             self.sym(self.net(out), sym, [("1", "I", self.net(conn["A"][0]), "A" in inverted),
                                           ("2", "I", self.net(conn["B"][0]), "B" in inverted),
                                           ("O", "O", self.net(out), False)])
-            self.stats["Gatter"] += 1
+            self.stats["gates"] += 1
         elif kind in ("$_NOT_", "$_BUF_"):
             out = conn["Y"][0]
             self.sym(self.net(out), "INV" if kind == "$_NOT_" else "BUF",
                      [("I", "I", self.net(conn["A"][0]), False), ("O", "O", self.net(out), False)])
-            self.stats["Gatter"] += 1
+            self.stats["gates"] += 1
         elif kind in FUNCS:
             ports, f = FUNCS[kind]
             out = conn["Y"][0]
@@ -338,8 +338,8 @@ class _Writer:
             self.stats["FFs" if sym == "DFF" else "Latches"] += 1
 
     def text(self, part, title):
-        # Erst die Netze hinter den Pads, damit die Logik den IBUF bzw. Taktpuffer liest
-        ibufs = []    # (Pad, IBUF-Ausgang, Taktpuffer, dessen Ausgang)
+        # First the nets behind the pads, so that the logic reads the IBUF or clock buffer
+        ibufs = []    # (pad, IBUF output, clock buffer, its output)
         for pad, b, label, loc in self.inputs:
             if b in self.inff:
                 continue
@@ -369,7 +369,7 @@ class _Writer:
         for name, c in self.cells.items():
             if name not in moved:
                 self._cell(c)
-        inverted = {}     # E-Bit -> Netz nicht E (T des OBUFT)
+        inverted = {}     # E bit -> net not E (T of the OBUFT)
         for pad, b, label, loc in self.outputs:
             if b not in self.tbufs:
                 self.sym(pad, "OBUF", [("I", "I", self.net(b), False), ("O", "O", pad, False)])
@@ -384,7 +384,7 @@ class _Writer:
             else:
                 t = inverted[e] = self._unique(pad + "_T", self.nets)
                 self.sym(t, "INV", [("I", "I", self.net(e), False), ("O", "O", t, False)])
-                self.stats["Gatter"] += 1
+                self.stats["gates"] += 1
             self.sym(pad, "OBUFT", [("I", "I", self.net(conn["A"][0]), False), ("T", "I", t, False),
                                     ("O", "O", pad, False)])
             self._ext(pad, "B" if self.sinks.get(b) else "T", loc)
@@ -398,8 +398,8 @@ class _Writer:
 
 
 def write(module, part, title="", pins=None, clkbuf=True, gclk=None, aclk=None, iobff=False):
-    """XNF-Text für ein flaches yosys-Modul (dict aus write_json). part wie bei XACT (2064PC68-70), pins aus
-    read_pcf, clkbuf: Taktpuffer selbst wählen, gclk/aclk: Eingang (Name wie im Verilog) fest auf den Puffer,
-    iobff: Eingangs-FFs ins IOB (INFF). Gibt (Text, {Zähler}, [Taktpuffer]) zurück."""
+    """XNF text for a flat yosys module (dict from write_json). part as in XACT (2064PC68-70), pins from
+    read_pcf, clkbuf: choose the clock buffers automatically, gclk/aclk: input (name as in the Verilog) fixed onto
+    the buffer, iobff: input FFs into the IOB (INFF). Returns (text, {counters}, [clock buffers])."""
     w = _Writer(module, dict(pins or {}), clkbuf, gclk, aclk, iobff)
     return w.text(part, title), w.stats, w.clkbufs

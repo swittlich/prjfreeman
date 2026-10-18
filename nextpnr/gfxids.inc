@@ -1,7 +1,7 @@
-// Grafik-IDs: jede Leitung, die die GUI zeichnet (Reihenfolge wird in xc2064.cc ausgewertet)
-// Kanäle (xc2064db.graph): senkrecht V1-V5 (local.1-5), VL1-VL4 (long.1-4), waagerecht H1-H5 (local.1-5),
-// HL1-HL3 (long.1-3); ohne Zusatz das Stück dieser Kachel, _U/_R/_L/_D das der Nachbarkachel, in den
-// Pad-Kacheln (x = 0, y = 0) auch _D/_RU bzw. _R/_LD (Stücke der Kacheln darunter/rechts und schräg)
+// Graphics IDs: every line the GUI draws (the order is evaluated in xc2064.cc)
+// Channels (xc2064db.graph): vertical V1-V5 (local.1-5), VL1-VL4 (long.1-4), horizontal H1-H5 (local.1-5),
+// HL1-HL3 (long.1-3); without suffix the piece in this tile, _U/_R/_L/_D that in the neighbouring tile, in the
+// pad tiles (x = 0, y = 0) also _D/_RU or _R/_LD (pieces of the tiles below/to the right and diagonal)
 X(V1)
 X(V2)
 X(V3)
@@ -68,7 +68,7 @@ X(HL2_D)
 X(HL3_D)
 X(GCLK)
 X(ACLK)
-// IOBs: Pins (I, O, T wie die Bel-Pins) und X/Y der Rand-CLB im Ausgangs-Mux
+// IOBs: pins (I, O, T like the Bel pins) and X/Y of the edge CLB in the output mux
 X(IO0_I)
 X(IO0_O)
 X(IO0_T)
@@ -79,7 +79,7 @@ X(IO0_X)
 X(IO0_Y)
 X(IO1_X)
 X(IO1_Y)
-// gelatchte Eingänge: Takteingang K der IOBs und die Taktleitung je Seite (oben, rechts, unten, links)
+// latched inputs: clock input K of the IOBs and the clock line per side (top, right, bottom, left)
 X(IO0_K)
 X(IO1_K)
 X(IOCLK_T)

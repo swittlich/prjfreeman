@@ -1,14 +1,14 @@
-"""TEST1.LCA (XACT 5.1.0) als Gegenprobe für TEST1.RBT: XACT listet je Netz die Pins (Addnet) und alle
-programmierten Elemente (NProgram) mit eigenen Namen, je Block (Editblk) Base, Config und die Gleichungen
-der Funktionsgeneratoren (Equate). Daraus drei Prüfungen:
+"""TEST1.LCA (XACT 5.1.0) as a cross-check for TEST1.RBT: per net, XACT lists the pins (Addnet) and all
+programmed elements (NProgram) under its own names, per block (Editblk) Base, Config and the equations
+of the function generators (Equate). From this, three checks:
 
-  elements()  jedes Element von XACT muss in der Dekodierung von TEST1.RBT stehen (Namen und Bitkarte)
-  nets()      der Routing-Graph muss die CLB-Pins jedes Netzes verbinden und verschiedene Netze trennen
-  blocks()    Config und Equate jedes Blocks müssen zur Dekodierung passen (blocks.py)
+  elements()  every element from XACT must appear in the decoding of TEST1.RBT (names and bit map)
+  nets()      the routing graph must connect the CLB pins of each net and keep different nets separate
+  blocks()    Config and Equate of each block must match the decoding (blocks.py)
 
-Namen bei XACT: "BD.8.2.0 BD.8.2.4" ist eine Verbindung der Switch-Matrix BD.8.2 (Pins ab 0, hier ab 1),
-"col.D.local.3:AD.B" die Quelle des CLB-Eingangs AD.B, "col.D.local.4:BC.X" ein Ausgangs-Pip,
-"col.B.local.5:row.B.local.3-s" ein PIP (Zusatz -s/-l ohne Bedeutung für das Bit), "...:PAD17.T" ein IOB.
+Names in XACT: "BD.8.2.0 BD.8.2.4" is a connection of the switch matrix BD.8.2 (pins from 0, here from 1),
+"col.D.local.3:AD.B" the source of the CLB input AD.B, "col.D.local.4:BC.X" an output pip,
+"col.B.local.5:row.B.local.3-s" a PIP (suffix -s/-l irrelevant for the bit), "...:PAD17.T" an IOB.
 """
 import collections
 import re
@@ -18,7 +18,7 @@ from .graph import conn_on
 
 
 def parse(path=None):
-    """{Netz: {"pins": [...], "elements": [...]}} in Dateireihenfolge"""
+    """{net: {"pins": [...], "elements": [...]}} in file order"""
     nets = collections.OrderedDict()
     for line in sources.read_text(path or sources.TEST1_RBT.replace(".RBT", ".LCA")).splitlines():
         w = line.split()
@@ -32,14 +32,14 @@ def parse(path=None):
 
 
 def classify(elements):
-    """Elemente eines Netzes -> Liste (Art, Name) mit Art switch, pip, mux, out, iob"""
+    """Elements of a net -> list (kind, name) with kind switch, pip, mux, out, iob"""
     out, i = [], 0
     while i < len(elements):
         e = elements[i]
         m = re.fullmatch(r"([A-I][A-I]\.8\.[12])\.([0-7])", e)
         if m:
             m2 = re.fullmatch(r"([A-I][A-I]\.8\.[12])\.([0-7])", elements[i + 1])
-            assert m2 and m2[1] == m[1], "Switch-Pins nicht paarweise: %s %s" % (e, elements[i + 1])
+            assert m2 and m2[1] == m[1], "switch pins not in pairs: %s %s" % (e, elements[i + 1])
             p = sorted((int(m[2]) + 1, int(m2[2]) + 1))
             out.append(("switch", "%s %d-%d" % (m[1], p[0], p[1])))
             i += 2
@@ -61,11 +61,11 @@ def classify(elements):
 
 
 def check_elements(nets, items, db):
-    """Elemente von XACT, die in der Dekodierung (config.decode) fehlen: {Art: [Name, ...]}, dazu Zähler und die
-    Kreuzungen an K-Muxen als Mux-Zeilen. IOB-Elemente "LINE:PADn.O/T" sind Mux-Quellen, "LINE:PADn.I"
-    Eingangs-Pips (Lage aus iob.js); Takte der gelatchten IOBs (.K und die Kreuzungen ohne PIP-Bit an den
-    K-Muxen) zählen unter "iob-k" und werden nicht geprüft (TEST1 nennt am K-Mux oben zwei Quellen)."""
-    kmux_at = {}  # "col:row" der Kreuzung mit der Stichleitung -> "Pnn.K Quelle"
+    """Elements from XACT that are missing from the decoding (config.decode): {kind: [name, ...]}, plus counters
+    and the crossings at K muxes as mux lines. IOB elements "LINE:PADn.O/T" are mux sources, "LINE:PADn.I"
+    input pips (position from iob.js); clocks of the latched IOBs (.K and the crossings without a PIP bit at
+    the K muxes) count under "iob-k" and are not checked (TEST1 names two sources at the top K mux)."""
+    kmux_at = {}  # "col:row" of the crossing with the stub -> "Pnn.K source"
     for pin, km in db.kmuxes.items():
         for ent in km.sources:
             if ent.kind == "route":
@@ -81,8 +81,8 @@ def check_elements(nets, items, db):
             have.add(("mux", "%s %s" % (it.name, it.value)))
     pin_of = {iob.pad: pin for pin, iob in db.iobs.items()}
     pip_names = {db.lines.pip_name(e.key[0]) for e in db.entries if e.kind == "pip"}
-    # Puffer aus bzw. immer an: die T-Bits tragen den Modus, eine geroutete Leitung am T-Eingang wählt der
-    # Mux dann nicht (in TEST1 z. B. P8 "BUF:" mit Netz an P8.T)
+    # buffer off or always on: the T bits carry the mode, the mux then does not select a routed line at the
+    # T input (in TEST1 e.g. P8 "BUF:" with a net at P8.T)
     t_mode = {it.name: it.value for it in items if it.kind == "mux" and it.name.endswith(".T")}
     for p, v in t_mode.items():
         if v in ("off", "on"):
@@ -103,12 +103,12 @@ def check_elements(nets, items, db):
                 else:
                     ent = [e for e in db.iobs[pin].i if e.kind == "route" and e.line == line]
                     kind, name = "pip", db.lines.pip_name(ent[0].g) if ent else "%s.I %s" % (pin, line)
-            if kind == "out":  # X -> Zeile io6, Y -> Zeile y der CLB
+            if kind == "out":  # X -> row io6, Y -> row y of the CLB
                 clb, line = name.split()
                 row = "row.%s.%s" % (clb[0], "io6" if clb.endswith(".X") else "y")
                 kind, name = "pip", "%s:%s" % (line, row)
             if kind == "pip" and name not in pip_names:
-                kind = "iob-k"  # Kreuzung ohne PIP-Bit: Quelle eines K-Mux (Takt gelatchter IOBs)
+                kind = "iob-k"  # crossing without a PIP bit: source of a K mux (clock of latched IOBs)
                 if name in kmux_at:
                     kmux.append(kmux_at[name])
             count[kind] += 1
@@ -118,9 +118,9 @@ def check_elements(nets, items, db):
 
 
 def check_nets(nets, graph, raw, skip=()):
-    """Verbindet der Graph mit den programmierten Bits die CLB- und IOB-Pins jedes Netzes, und nur diese?
-    skip: Pins, die nicht zählen (T-Eingänge mit Puffer aus/an). Ergebnis: Liste (Netz, Pins, Zustand) mit
-    Zustand ok, getrennt (Pins in mehreren Teilen) oder verbunden mit (Pins eines anderen Netzes im selben Teil)."""
+    """Does the graph, with the programmed bits, connect the CLB and IOB pins of each net, and only these?
+    skip: pins that do not count (T inputs with buffer off/on). Result: list (net, pins, state) with state
+    ok, separated (pins in several parts) or connected to (pins of another net in the same part)."""
     parent = {}
 
     def find(n):
@@ -145,17 +145,17 @@ def check_nets(nets, graph, raw, skip=()):
     for r in result:
         parts = {find(p) for p in r[1]}
         if len(parts) > 1:
-            r[2] = "getrennt"
+            r[2] = "separated"
         elif parts:
             other = owner[next(iter(parts))]
-            r[2] = "ok" if other == r[0] else "verbunden mit %s" % other
+            r[2] = "ok" if other == r[0] else "connected to %s" % other
         else:
-            r[2] = "ohne CLB-Pins"
+            r[2] = "no CLB pins"
     return result
 
 
 def parse_blocks(path=None):
-    """{Block: {"base": ..., "config": {Feld: Wert}, "equate": [(F/G, Gleichung)]}} (CLBs und IOBs)"""
+    """{block: {"base": ..., "config": {field: value}, "equate": [(F/G, equation)]}} (CLBs and IOBs)"""
     text = sources.read_text(path or sources.TEST1_RBT.replace(".RBT", ".LCA"))
     out = {}
     for name, body in re.findall(r"Editblk (\S+)\n(.*?)Endblk", text, re.S):
@@ -172,9 +172,9 @@ def _eval(eq, env):
 
 
 def check_blocks(lca_blocks, items):
-    """Abweichungen der dekodierten Blöcke (Items clb/iob/mux aus config.decode) von Config und Equate:
-    Liste (Block, Text). Leere Felder bei XACT (unbenutzt) zählen nicht; XACT nennt bei F/G nur die
-    benutzten Eingänge, die müssen unter den gewählten sein."""
+    """Deviations of the decoded blocks (items clb/iob/mux from config.decode) from Config and Equate:
+    list (block, text). Empty fields in XACT (unused) do not count; for F/G, XACT names only the
+    used inputs, which must be among the selected ones."""
     from . import blocks as blocks_mod
     clb = {it.name: blocks_mod.parse_fields(it.value) for it in items if it.kind == "clb"}
     iob = {it.name: blocks_mod.parse_fields(it.value) for it in items if it.kind == "iob"}
@@ -186,39 +186,39 @@ def check_blocks(lca_blocks, items):
             got = {"I": iob[pin]["I"], "BUF": {"on": "ON", "off": ""}.get(tmux[pin], "TRI")}
             for k, v in b["config"].items():
                 if v and got.get(k) != v:
-                    bad.append((name, "%s:%s, dekodiert %s" % (k, v, got.get(k))))
+                    bad.append((name, "%s:%s, decoded %s" % (k, v, got.get(k))))
             continue
         f = clb[name]
         if b["base"] != f["BASE"]:
-            bad.append((name, "Base %s, dekodiert %s" % (b["base"], f["BASE"])))
+            bad.append((name, "Base %s, decoded %s" % (b["base"], f["BASE"])))
         for k in ("X", "Y", "Q", "SET", "RES", "CLK"):
             v = b["config"].get(k, "")
             if (v or k in ("SET", "RES", "CLK")) and v != f[k]:
-                bad.append((name, "%s:%s, dekodiert %s" % (k, v, f[k])))
+                bad.append((name, "%s:%s, decoded %s" % (k, v, f[k])))
         for lut, eq in b["equate"]:
             ins = f[lut].split(":")
             table = int(f["LUT" + lut], 16)
-            if f["BASE"] == "F":  # 4 Variablen, B = 1: Tabelle F
+            if f["BASE"] == "F":  # 4 variables, B = 1: table F
                 table, ins = int(f["LUTF"], 16) << 8 | int(f["LUTG"], 16), ins + ["B"]
             for i in range(1 << len(ins)):
                 vals = [(v, (i >> k) & 1) for k, v in enumerate(ins)]
                 if any(a == c and x != y for a, x in vals for c, y in vals):
-                    continue  # derselbe Eingang zweimal: Kombination kommt nicht vor
+                    continue  # the same input twice: combination cannot occur
                 env = dict({v: 0 for v in "ABCDQ"}, **dict(vals))
                 if _eval(eq, env) != (table >> i) & 1:
-                    bad.append((name, "%s = %s stimmt nicht mit LUT%s %s (%s)" % (lut, eq, lut, f["LUT" + lut], f[lut])))
+                    bad.append((name, "%s = %s does not match LUT%s %s (%s)" % (lut, eq, lut, f["LUT" + lut], f[lut])))
                     break
     return bad
 
 
-# --- Konfiguration -> LCA (Gegenprobe mit MAKEBITS) ---------------------------------------------------
+# --- Configuration -> LCA (cross-check with MAKEBITS) -------------------------------------------------
 PIN = re.compile(r"[A-H][A-H]\.[ABCDKXY]|P\d+\.[IOTK]|CLK\.(AA|II)\.[IO]")
 DRIVER = re.compile(r"[A-H][A-H]\.[XY]|PAD\d+\.I|CLK\.(AA|II)\.O")
 
 
 def _equation(ins, table):
-    """Gleichung im Stil von XACT (~, *, +) als Summe der Minterme über die Eingänge ins (Bit i der Tabelle:
-    Eingang k = (i >> k) & 1); None für die Konstante 0"""
+    """Equation in XACT style (~, *, +) as a sum of the minterms over the inputs ins (bit i of the table:
+    input k = (i >> k) & 1); None for the constant 0"""
     names = list(dict.fromkeys(ins))
     terms = []
     for v in range(1 << len(names)):
@@ -229,12 +229,12 @@ def _equation(ins, table):
 
 
 def _clb_block(name, f):
-    """Editblk einer CLB aus den Feldern des Textformats (blocks.parse_fields)"""
+    """Editblk of a CLB from the fields of the text format (blocks.parse_fields)"""
     base, clk = f["BASE"], f["CLK"]
     uses = {f["X"], f["Y"], f["SET"], f["RES"], clk.split(":")[0]} | ({"F"} if clk else set())
     out = ["Editblk %s" % name, "Base %s" % base]
     luts = []
-    if base == "F":  # eine Funktion von 4 Variablen, B = 1 wählt Tabelle F
+    if base == "F":  # one function of 4 variables, B = 1 selects table F
         luts.append(("F", f["F"].split(":") + ["B"], int(f["LUTF"], 16) << 8 | int(f["LUTG"], 16)))
     else:
         for lut in ("F", "G"):
@@ -252,7 +252,7 @@ def _clb_block(name, f):
 
 
 def _coords(db, g, cn):
-    """G-Lagen ({xGy} bei XACT), die eine Verbindung programmieren; Switch-Matrix: beide Pins nacheinander"""
+    """G positions ({xGy} in XACT) that program a connection; switch matrix: both pins one after the other"""
     from . import switches
     if cn.kind in ("pip", "out", "clkout", "junction", "iobi"):
         return [db.entries[cn.bits[0]].key[0]]
@@ -275,17 +275,17 @@ def _coords(db, g, cn):
     else:
         return []
     if not ent.g:
-        raise ValueError("%s: keine G-Lage bekannt" % cn.name)
+        raise ValueError("%s: no G position known" % cn.name)
     return [ent.g]
 
 
 def write(db, g, lines, part="2064PC68", speed="-70", title="DESIGN"):
-    """Konfiguration (Zeilen aus config.parse_text, etwa von nextpnr) als LCA für MAKEBITS: je Netz die Pins
-    (Addnet) und die G-Lagen der programmierten Elemente (Program, nur diese liest MAKEBITS), je benutzter CLB
-    bzw. benutztem IOB ein Block mit Base, Config und Equate. Die Netze ergeben sich aus dem Zusammenhang der
-    Verbindungen in den Zeilen, an den Taktpuffern getrennt (CLK.AA.I/CLK.II.I am Netz der Quelle, CLK.AA.O/
-    CLK.II.O am Taktnetz). Die Richtung der Repowering-Puffer und die Optionen legt MAKEBITS selbst fest.
-    Ergebnis: Text mit CRLF. ValueError bei einer Zeile ohne Verbindung im Graphen oder ohne G-Lage."""
+    """Configuration (lines from config.parse_text, e.g. from nextpnr) as LCA for MAKEBITS: per net the pins
+    (Addnet) and the G positions of the programmed elements (Program, MAKEBITS reads only these), per used CLB
+    or IOB a block with Base, Config and Equate. The nets follow from the connectivity of the connections in
+    the lines, split at the clock buffers (CLK.AA.I/CLK.II.I on the net of the source, CLK.AA.O/CLK.II.O on
+    the clock net). MAKEBITS determines the direction of the repowering buffers and the options itself.
+    Result: text with CRLF. ValueError for a line without a connection in the graph or without a G position."""
     from . import blocks
     by_cfg = collections.defaultdict(list)
     for cn in g.conns:
@@ -302,7 +302,7 @@ def write(db, g, lines, part="2064PC68", speed="-70", title="DESIGN"):
         else:
             continue
         if key not in by_cfg:
-            raise ValueError("Zeile %d (%s): keine Verbindung im Graphen" % (l.lineno, key))
+            raise ValueError("line %d (%s): no connection in the graph" % (l.lineno, key))
         conns += by_cfg[key][:1]
     latched = {l.name for l in lines if l.kind == "iob" and blocks.parse_fields(l.value).get("I") == "Q"}
     conns += [cn for cn in g.conns if cn.kind == "iobkin" and cn.b[:-2] in latched]
@@ -318,7 +318,7 @@ def write(db, g, lines, part="2064PC68", speed="-70", title="DESIGN"):
 
     buf_out = {"GCLK": "CLK.AA.O", "ACLK": "CLK.II.O"}
     for cn in conns:
-        if cn.kind == "clkbuf":  # am Puffer getrennt: Pin CLK.AA.I bzw. CLK.II.I am Netz der Quelle
+        if cn.kind == "clkbuf":  # split at the buffer: pin CLK.AA.I or CLK.II.I on the net of the source
             parent[find(cn.name.split()[0])] = find(cn.a)
         else:
             parent[find(cn.a)] = find(cn.b)
@@ -331,7 +331,7 @@ def write(db, g, lines, part="2064PC68", speed="-70", title="DESIGN"):
     for cn in conns:
         progs[find(cn.a)].append(_coords(db, g, cn))
 
-    # Pads mit XACTs Namen PADn (unabhängig vom Gehäuse, Pnn hieße bei XACT der Pin des Gehäuses)
+    # pads with XACT's names PADn (independent of the package; in XACT, Pnn would be the package pin)
     from .iobmux import pads
     pad = {p: n for p, _, _, n in pads()}
     xname = lambda n: re.sub(r"^(P\d+)(?=\.|$)", lambda m: pad[m[1]], n)  # noqa: E731
@@ -344,7 +344,7 @@ def write(db, g, lines, part="2064PC68", speed="-70", title="DESIGN"):
             nets.append((pins, progs[r]))
     for k, (pins, prog) in enumerate(sorted(nets)):
         out.append("Addnet N%d %s " % (k, " ".join(pins)))
-        line = []  # MAKEBITS paart die beiden Pins einer Switch-Matrix nur innerhalb einer Zeile
+        line = []  # MAKEBITS pairs the two pins of a switch matrix only within one line
         for i, coords in enumerate(prog):
             line += coords
             if len(line) >= 32 or i == len(prog) - 1:

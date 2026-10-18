@@ -1,26 +1,26 @@
-"""IOBs: Quellen des Ausgangs-Mux (O, bei XACT "Pnn.O"), des Tristate-Mux (T) mit ihren Codes und die
-Pips des Eingangs (I) auf die Leitungen, nachgebildet aus Shirriffs iob.js (generateIobPips).
+"""IOBs: sources of the output mux (O, "Pnn.O" in XACT) and of the tristate mux (T) with their codes, and the
+pips of the input (I) onto the lines, reproduced from Shirriff's iob.js (generateIobPips).
 
-Ein Eintrag in iob.js ist die Kreuzung einer Stichleitung des IOB mit einer Leitung: "|col.?.x:row.A.local.2"
-(senkrechte Stichleitung col.?.x des IOB, Routing-Leitung row.A.local.2) bzw. "-col.?.long.1:row.A.io3"
-(waagerechte Stichleitung, Routing-Leitung col.?.long.1); "?" ist die Spalte bzw. Zeile der Kachel.
-Einträge ohne | oder - sind Direktverbindungen (X/Y einer CLB, Taktleitungen, Pad -> CLB-Pin).
+An entry in iob.js is the crossing of a stub of the IOB with a line: "|col.?.x:row.A.local.2"
+(vertical stub col.?.x of the IOB, routing line row.A.local.2) or "-col.?.long.1:row.A.io3"
+(horizontal stub, routing line col.?.long.1); "?" is the column or row of the tile.
+Entries without | or - are direct connections (X/Y of a CLB, clock lines, pad -> CLB pin).
 
-Die Stichleitungen am Rand (io1-io6, x, clbl, clbr, clbw, local.0, local.5 der Randzeilen und -spalten) sind
-Teile des IOB, keine Routing-Leitungen. Die O- und T-Muxe sind kodiert (Bits "IOB Pnn.O/T MuxBit"), der Code
-der T-Bits wählt zugleich den Modus: Tristate mit Quelle, aus (Ausgang nie aktiv) oder an (immer aktiv).
+The stubs at the edge (io1-io6, x, clbl, clbr, clbw, local.0, local.5 of the edge rows and columns) are
+parts of the IOB, not routing lines. The O and T muxes are encoded (bits "IOB Pnn.O/T MuxBit"); the code
+of the T bits also selects the mode: tristate with a source, off (output never active) or on (always active).
 
-Takt der gelatchten Eingänge (Data Book: die IOBs einer Chipseite teilen sich einen Takt): je Seite eine
-Taktleitung, an der jedes IOB der Seite fest hängt (iob.js: kin), getrieben von einem K-Mux an einer Ecke mit
-Quellen aus dem Randkanal derselben Seite. Die Bitkarte ordnet die 4 Bits jedes K-Muxes einem Pad zu ("IOB
-P9.K MuxBit", P9 oben, P59 rechts, P27 unten, P24 links), Codes aus iob.js (generateIobPips).
+Clock of the latched inputs (Data Book: the IOBs of one chip side share one clock): one clock line per side,
+to which every IOB of that side is hardwired (iob.js: kin), driven by a K mux at a corner with sources from the
+edge channel of the same side. The bit map assigns the 4 bits of each K mux to a pad ("IOB P9.K MuxBit", P9
+top, P59 right, P27 bottom, P24 left), codes from iob.js (generateIobPips).
 
-Eingänge der Taktpuffer (Datenblatt Bild 8b): GCLK oben links (Bits "CLB CLK.AA.I MuxBit 0-5") und ACLK unten
-rechts ("CLB CLK.II.I MuxBit 0-7"). Shirriff dekodiert sie nicht, und kein XACT-Bitstream benutzt sie. Quellen
-und Codes stammen aus MAKEBITS (XACT 5.2.0, nur als Blackbox): je Quelle ein LCA mit genau diesem Pip
-(Program {xGy}), daraus der Bitstream. Bit 5 schaltet eine von fünf Quellen an Bit 0-4 zu (aktiv 0, wie die
-anderen Muxe), ohne programmiertes Bit gilt die erste Quelle der Tabelle. ACLK kann außerdem der
-Quarzoszillator an P43/P46 treiben (XACT OSC.II.O, Bits 6 und 7).
+Inputs of the clock buffers (datasheet Figure 8b): GCLK at the top left (bits "CLB CLK.AA.I MuxBit 0-5") and
+ACLK at the bottom right ("CLB CLK.II.I MuxBit 0-7"). Shirriff does not decode them, and no XACT bitstream uses
+them. Sources and codes come from MAKEBITS (XACT 5.2.0, only as a black box): per source an LCA with exactly
+this pip (Program {xGy}), and from it the bitstream. Bit 5 switches in one of five sources on bits 0-4 (active
+0, like the other muxes); with no bit programmed, the first source of the table applies. ACLK can also be
+driven by the crystal oscillator at P43/P46 (XACT OSC.II.O, bits 6 and 7).
 """
 import collections
 import re
@@ -28,14 +28,14 @@ import re
 from . import sources
 
 Entry = collections.namedtuple("Entry", "index spec kind line col row g special")
-# kind: route (Routing-Leitung line), x/y (X bzw. Y der CLB special), gclk, aclk_in (P43 -> ACLK-Puffer),
-#       clb (Pad -> CLB-Pin special), stub (Stichleitung eines IOB special, Signal unbekannt),
-#       pad (Eingang des Pads special in einen Taktpuffer), osc (Quarzoszillator)
-# Sonderfälle "@x:AH=col.H.clbr3:row.?.io3": hinter "=" die Kreuzung aus iob.js (G-Lage für XACTs Program)
+# kind: route (routing line in line), x/y (X or Y of the CLB in special), gclk, aclk_in (P43 -> ACLK buffer),
+#       clb (pad -> CLB pin in special), stub (IOB stub in special, signal unknown),
+#       pad (input of the pad in special into a clock buffer), osc (crystal oscillator)
+# special cases "@x:AH=col.H.clbr3:row.?.io3": after "=" the crossing from iob.js (G position for XACT's Program)
 
-# K-Muxe: Pad der Bits -> (Seite, Stichleitung des Muxes an der Ecke, Quellen in der Reihenfolge von iob.js,
-# Code -> Index). "@gclk" ist CLK.AA.O bzw. col.A.clk (GCLK), "@stub:..." eine IOB-Stichleitung unbekannter
-# Herkunft.
+# K muxes: pad of the bits -> (side, stub of the mux at the corner, sources in the order of iob.js,
+# code -> index). "@gclk" is CLK.AA.O or col.A.clk (GCLK), "@stub:..." an IOB stub of unknown
+# origin.
 KMUX_SPEC = {
     "P9": ("T", "col.I.local.0", ["@gclk", "row.A.local.1", "row.A.local.2", "row.A.local.3", "row.A.local.4",
                                   "row.A.long.3"], {4: 0, 8: 1, 15: 2, 14: 3, 9: 4, 5: 5}),
@@ -49,8 +49,8 @@ KMUX_SPEC = {
 SIDES = "TRBL"
 KMux = collections.namedtuple("KMux", "pin side stub sources codes bits")
 
-# Eingangs-Muxe der Taktpuffer: Mux -> (Taktnetz, [(Code, Quelle, Kreuzung G)]), die Grundstellung zuerst.
-# Quelle: Leitung, "@pad:Pnn" (Eingang des Pads, bei XACT PADn.I) oder "@osc"
+# Input muxes of the clock buffers: mux -> (clock net, [(code, source, crossing G)]), the default setting first.
+# Source: line, "@pad:Pnn" (input of the pad, PADn.I in XACT) or "@osc"
 CLKMUX_SPEC = {
     "CLK.AA.I": ("GCLK", [(63, "row.A.local.3", "16G164"), (30, "@pad:P11", "16G149"), (29, "@pad:P9", "16G156"),
                           (27, "col.A.local.3", "8G157"), (23, "col.A.long.3", "11G157"),
@@ -65,21 +65,21 @@ ClkMux = collections.namedtuple("ClkMux", "name net sources codes bits")
 class Iob:
     def __init__(self, pin, tile, style, pad):
         self.pin, self.tile, self.style, self.pad = pin, tile, style, pad
-        self.o, self.i, self.t = [], [], []  # Listen von Entry
-        self.omux = {}  # Code -> Index in o
-        self.tmux = {}  # Code -> Index in t (Tristate)
-        self.t_off = self.t_on = None  # Codes: Ausgang aus bzw. immer an
-        self.obits, self.tbits = {}, {}  # n -> Bitnummer
+        self.o, self.i, self.t = [], [], []  # lists of Entry
+        self.omux = {}  # code -> index in o
+        self.tmux = {}  # code -> index in t (tristate)
+        self.t_off = self.t_on = None  # codes: output off or always on
+        self.obits, self.tbits = {}, {}  # n -> bit number
 
 
 def pads():
-    """Pad-Tabelle aus iob.js: [(Pin, Kachel, Art, PADn)]"""
+    """Pad table from iob.js: [(pin, tile, style, PADn)]"""
     js = sources.read_text(sources.IOB_JS)
     return re.findall(r'\["(P\d+)",\s*"([A-I][A-I])",\s*"(\w+)",\s*"(PAD\d+)"\]', js)
 
 
 def _lists(pin, tile, d):
-    """o, i, t, omux, (tmux, t_off, t_on) wie in generateIobPips"""
+    """o, i, t, omux, (tmux, t_off, t_on) as in generateIobPips"""
     r, c = tile
     prev_r, prev_c = chr(ord(r) - 1), chr(ord(c) - 1)
     std_t_top = {3: 0, 1: 1, 7: 2, 5: 3}
@@ -201,12 +201,12 @@ def _lists(pin, tile, d):
              "-col.A.long.3:row.?.io3", "|col.A.io2:row.?.local.3", "|col.A.io2:row.?.local.5"]
         om = {5: 0, 3: 1, 15: 2, 4: 3, 2: 4, 14: 5}
     else:
-        raise ValueError("unbekannte IOB-Art %s" % d)
+        raise ValueError("unknown IOB kind %s" % d)
     return o, i, t, om, tm
 
 
 def _entry(idx, spec, tile, lines):
-    """Ein Eintrag aus iob.js -> Entry (Routing-Leitung oder Sonderfall, dieser mit G-Lage, wenn bekannt)"""
+    """One entry from iob.js -> Entry (routing line or special case, the latter with G position if known)"""
     if spec.startswith("@"):
         head, _, cross = spec[1:].partition("=")
         kind, _, arg = head.partition(":")
@@ -225,7 +225,7 @@ def _entry(idx, spec, tile, lines):
 
 
 def iobs(lines, entries):
-    """Pin -> Iob für alle 58 Pads, mit Bits aus der Bitkarte"""
+    """Pin -> Iob for all 58 pads, with bits from the bit map"""
     result = {}
     for pin, tile, style, pad in pads():
         iob = Iob(pin, tile, style, pad)
@@ -245,15 +245,15 @@ def iobs(lines, entries):
     for iob in result.values():
         for name, bits, codes in (("O", iob.obits, iob.omux), ("T", iob.tbits, iob.tmux)):
             if sorted(bits) != list(range(len(bits))):
-                raise ValueError("%s.%s: Mux-Bits %s nicht lückenlos" % (iob.pin, name, sorted(bits)))
+                raise ValueError("%s.%s: mux bits %s not contiguous" % (iob.pin, name, sorted(bits)))
             bad = [c for c in codes if c >= 1 << len(bits)]
             if bad:
-                raise ValueError("%s.%s: Codes %s passen nicht in %d Bits" % (iob.pin, name, bad, len(bits)))
+                raise ValueError("%s.%s: codes %s do not fit into %d bits" % (iob.pin, name, bad, len(bits)))
     return result
 
 
 def kmuxes(lines, entries):
-    """Pad der Bits -> KMux (Quellen als Entry an der Kreuzung mit der Stichleitung, bits: n -> Bitnummer)"""
+    """Pad of the bits -> KMux (sources as Entry at the crossing with the stub, bits: n -> bit number)"""
     bits = collections.defaultdict(dict)
     for e in entries:
         if e.kind == "iobmux" and e.key[1] == "K":
@@ -265,7 +265,7 @@ def kmuxes(lines, entries):
             if spec.startswith("@"):
                 kind, _, arg = spec[1:].partition(":")
                 g = None
-                if kind == "gclk":  # Kreuzung der Stichleitung mit CLK.AA.O (oben) bzw. col.A.clk (links)
+                if kind == "gclk":  # crossing of the stub with CLK.AA.O (top) or col.A.clk (left)
                     col, row = (stub, "CLK.AA.O") if stub.startswith("col.") else ("col.A.clk", stub)
                     g = "%dG%d" % (lines.col_info[col][0], lines.row_info[row][0])
                 sources.append(Entry(k, spec, kind, None, None, None, g, arg or None))
@@ -275,14 +275,14 @@ def kmuxes(lines, entries):
             col, row = lines.canonical_col(col), lines.canonical_row(row)
             sources.append(Entry(k, spec, "route", row if stub.startswith("col.") else col, col, row, g, None))
         if sorted(bits[pin]) != [0, 1, 2, 3] or any(c >= 16 for c in codes):
-            raise ValueError("%s.K: Mux-Bits %s bzw. Codes passen nicht" % (pin, sorted(bits[pin])))
+            raise ValueError("%s.K: mux bits %s or codes do not match" % (pin, sorted(bits[pin])))
         result[pin] = KMux(pin, side, stub, sources, codes, bits[pin])
     return result
 
 
 def clkmuxes(lines, entries):
-    """Mux (CLK.AA.I, CLK.II.I) -> ClkMux (Quellen als Entry an ihrer Kreuzung, codes: Code -> Index,
-    bits: n -> Bitnummer)"""
+    """Mux (CLK.AA.I, CLK.II.I) -> ClkMux (sources as Entry at their crossing, codes: code -> index,
+    bits: n -> bit number)"""
     bits = collections.defaultdict(dict)
     for e in entries:
         if e.kind == "clkmux":
@@ -299,13 +299,13 @@ def clkmuxes(lines, entries):
             gx, gy = (int(v) for v in g.split("G"))
             col, row = lines.col_name[gx], lines.row_name[gy]
             if spec not in (col, row):
-                raise ValueError("%s: Quelle %s liegt nicht an der Kreuzung %s (%s, %s)" % (name, spec, g, col, row))
+                raise ValueError("%s: source %s does not lie at the crossing %s (%s, %s)" % (name, spec, g, col, row))
             sources.append(Entry(k, spec, "route", spec, col, row, g, None))
         n = len(bits[name])
         if sorted(bits[name]) != list(range(n)) or any(c >= 1 << n for c in codes):
-            raise ValueError("%s: Mux-Bits %s bzw. Codes passen nicht" % (name, sorted(bits[name])))
+            raise ValueError("%s: mux bits %s or codes do not match" % (name, sorted(bits[name])))
         if (1 << n) - 1 not in codes:
-            raise ValueError("%s: keine Quelle für die Grundstellung" % name)
+            raise ValueError("%s: no source for the default setting" % name)
         result[name] = ClkMux(name, net, sources, codes, bits[name])
     return result
 
@@ -315,8 +315,8 @@ def code(bits, raw):
 
 
 def source_name(ent):
-    """Name einer Quelle des O-, T-, K- bzw. Taktpuffer-Mux im Textformat: Leitung, X/Y einer CLB, GCLK,
-    Stichleitung, Pad (P9) oder OSC"""
+    """Name of a source of the O, T, K or clock buffer mux in the text format: line, X/Y of a CLB, GCLK,
+    stub, pad (P9) or OSC"""
     if ent.kind == "route":
         return ent.line
     if ent.kind in ("x", "y"):

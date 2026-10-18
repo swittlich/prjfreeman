@@ -1,7 +1,7 @@
-// Techmap von yosys-internen Zellen auf die Primitive des XC2064-Modells.
+// Techmap from yosys-internal cells to the primitives of the XC2064 model.
 
-// $lut (von "abc -lut 3:4") -> XC2000_LUT3 (F oder G) bzw. XC2000_LUT4 (F und G gemeinsam).
-// Kleinere Funktionen werden in INIT repliziert, damit die offenen Eingänge keinen Einfluss haben.
+// $lut (from "abc -lut 3:4") -> XC2000_LUT3 (F or G) or XC2000_LUT4 (F and G together).
+// Smaller functions are replicated in INIT so that the open inputs have no influence.
 module \$lut (A, Y);
 	parameter WIDTH = 0;
 	parameter LUT = 0;
@@ -25,8 +25,8 @@ module \$lut (A, Y);
 	endgenerate
 endmodule
 
-// Speicherelemente (nach dfflegalize) -> XC2000_DFF mit LATCH/CLKINV. Konstant inaktive Set-/Reset-Eingänge
-// bleiben offen, damit sie keinen der CLB-Eingänge belegen.
+// Storage elements (after dfflegalize) -> XC2000_DFF with LATCH/CLKINV. Constantly inactive set/reset inputs
+// stay open so that they do not occupy any of the CLB inputs.
 module \$_DFF_P_ (input C, input D, output Q);
 	XC2000_DFF #(.LATCH(0), .CLKINV(0)) _TECHMAP_REPLACE_ (.CLK(C), .D(D), .Q(Q));
 endmodule

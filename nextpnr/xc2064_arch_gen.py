@@ -1,45 +1,45 @@
-# Chip-Datenbank für ein Modell des Xilinx XC2064 (1985, das erste FPGA) als Himbächel-uarch.
+# Chip database for a model of the Xilinx XC2064 (1985, the first FPGA) as a Himbächel uarch.
 #
-# Grundlagen: XC2000-Datenblatt; Ken Shirriffs Reverse Engineering (github.com/shirriff/xc2064, als
-# Submodule external/shirriff-xc2064) mit der Bitkarte XC2064-def.txt, den Leitungsnamen (draw.js), den
-# CLB-Eingangs-Muxen (clb.js) und den IOB-Muxen (iob.js). Das Paket xc2064db (arch/xc2064/xc2064db) liest
-# diese Daten; der Routing-Graph entsteht aus xc2064db.graph, jeder Pip dort entspricht einem Bit bzw.
-# einem Mux-Code des Originals.
+# References: XC2000 datasheet; Ken Shirriff's reverse engineering (github.com/shirriff/xc2064, as the
+# submodule external/shirriff-xc2064) with the bit map XC2064-def.txt, the line names (draw.js), the
+# CLB input muxes (clb.js) and the IOB muxes (iob.js). The package xc2064db (arch/xc2064/xc2064db) reads
+# this data; the routing graph is built from xc2064db.graph, each pip there corresponds to one bit or
+# one mux code of the original.
 #
-# Raster (x, y; y nach unten): 8x8 CLBs bei x, y = 1..8 und ein IO-Ring bei 0 bzw. 9. Shirriffs 9x9
-# Kacheln AA..II (Zeile, Spalte) entsprechen x = Spalte, y = Zeile = 1..9: jede enthält die Kanäle
-# oberhalb und links ihrer CLB und an deren Kreuzung zwei Switch-Matrizen (8.1, 8.2). Die 9. Spalte/Zeile
-# (I) enthält nur Routing und Pads, die Kacheln x = 0 und y = 0 die Pads links und oben.
+# Grid (x, y; y downwards): 8x8 CLBs at x, y = 1..8 and an IO ring at 0 and 9. Shirriff's 9x9
+# tiles AA..II (row, column) correspond to x = column, y = row = 1..9: each contains the channels
+# above and to the left of its CLB and, at their crossing, two switch matrices (8.1, 8.2). The 9th column/row
+# (I) contains only routing and pads, the tiles x = 0 and y = 0 the pads on the left and at the top.
 #
-#   CLB (laut Decoder):
-#     Eingänge A, B, C, D, Takt K; Ausgänge X, Y
-#     F, G  : je eine Funktion von 3 Variablen; Eingang 1 aus {A, B}, 2 aus {B, C}, 3 aus {C, D, Q}
-#     FG    : F und G gemeinsam als eine Funktion von 4 Variablen, B wählt zwischen ihnen
-#     FGM   : dasselbe mit verschiedenen Eingängen von F und G (Mux-Modus, Data Book "Option 3")
-#     FF    : Flipflop oder Latch; Daten aus F (bzw. FG); Takt aus K, C oder G (invertierbar);
-#             asynchrones Set aus A oder F, asynchrones Reset aus D oder G
-#     X, Y  : je aus Q, F oder G
+#   CLB (according to the decoder):
+#     Inputs A, B, C, D, clock K; outputs X, Y
+#     F, G  : one function of 3 variables each; input 1 from {A, B}, 2 from {B, C}, 3 from {C, D, Q}
+#     FG    : F and G together as one function of 4 variables, B selects between them
+#     FGM   : the same with different inputs for F and G (mux mode, Data Book "Option 3")
+#     FF    : flip-flop or latch; data from F (or FG); clock from K, C or G (invertible);
+#             asynchronous set from A or F, asynchronous reset from D or G
+#     X, Y  : each from Q, F or G
 #   Routing (xc2064db.graph):
-#     Kanäle:         senkrecht local.1-4 (durch die Matrizen), die fünfte Leitung (local.5, versetzt mit
-#                     Verbindungspunkt je Zeile), 2 Long Lines und GCLK; waagerecht 4 Einzelsegmente und
-#                     eine Long Line, am Rand 4 Einzelsegmente und 2 Long Lines
-#     Switch-Matrix:  2 je Kreuzung, 8 Pins, Verbindungen aus den Magic-Bits (innen 20, am Rand 10)
-#     CLB-Eingänge:   alle Quellen aus clb.js (A 6-7, B 10, C 8, D 6-7, K 2)
-#     Ausgänge:       X (Zeile io6) und Y (Zeile y) über ihre PIP-Bits in den Kanal rechts, X fest an A/B
-#                     der CLB darunter und C/D der CLB darüber, Y fest an B der CLB rechts
-#     Takt:           GCLK (col.*.clk) auf B und K, ACLK (row.I.clk) über die senkrechten long.2 auf K
-#     IOBs (iob.js):  O-Mux (Leitungen, X/Y der Rand-CLB, GCLK an P9) und T-Mux (2 Einzelsegmente, 2 Long
-#                     Lines; Puffer aus/an ist Konfiguration, kein Pip), I über PIP-Bits auf die Leitungen
-#                     beider Kanäle am Pad und fest an die Eingänge der Rand-CLB
-#                     Takteingang K (gelatchter Eingang) fest an der Taktleitung IOCLK der Seite, die ein
-#                     K-Mux an der Ecke aus dem Randkanal speist (oben/rechts in AI, unten/links in IA)
-#     Taktpuffer:     Eingangs-Muxe CLK.AA.I (GCLK: P9, P11, 4 Randleitungen) und CLK.II.I (ACLK: P43, P46,
-#                     4 Randleitungen) mit Codes aus MAKEBITS; Pips der Leitungen in AA bzw. II, der Pads beim Pad
-#     Konstanten:     keine Leitung (wie im Original); pack() faltet sie in LUT-Inhalte oder setzt eine LUT ein
-#   Repowering-Puffer an den Sektionsgrenzen sind kein Pip: ein Puffer ist nie aus, seine Richtung folgt aus
-#   dem Routing (xc2064db.graph.bidi_bit).
-#   Timing: CLB und IOB aus den Data Books 1993 und 1994 (Stufen -50, -70, -100, -130), Interconnect
-#   als RC-Modell wie im Datenblatt (Interconnect Performance), siehe DATABOOK und set_timings().
+#     Channels:       vertical local.1-4 (through the matrices), the fifth line (local.5, offset, with one
+#                     connection point per row), 2 Long Lines and GCLK; horizontal 4 single-length segments
+#                     and one Long Line, at the edge 4 single-length segments and 2 Long Lines
+#     Switch matrix:  2 per crossing, 8 pins, connections from the Magic bits (20 inside, 10 at the edge)
+#     CLB inputs:     all sources from clb.js (A 6-7, B 10, C 8, D 6-7, K 2)
+#     Outputs:        X (row io6) and Y (row y) via their PIP bits into the channel on the right, X hard-wired
+#                     to A/B of the CLB below and C/D of the CLB above, Y hard-wired to B of the CLB on the right
+#     Clock:          GCLK (col.*.clk) onto B and K, ACLK (row.I.clk) via the vertical long.2 onto K
+#     IOBs (iob.js):  O mux (lines, X/Y of the edge CLB, GCLK at P9) and T mux (2 single-length segments, 2 Long
+#                     Lines; buffer off/on is configuration, not a pip), I via PIP bits onto the lines of
+#                     both channels at the pad and hard-wired to the inputs of the edge CLB
+#                     Clock input K (latched input) hard-wired to the clock line IOCLK of its side, which a
+#                     K mux at the corner feeds from the edge channel (top/right in AI, bottom/left in IA)
+#     Clock buffers:  input muxes CLK.AA.I (GCLK: P9, P11, 4 edge lines) and CLK.II.I (ACLK: P43, P46,
+#                     4 edge lines) with codes from MAKEBITS; pips from lines in AA or II, from pads at the pad
+#     Constants:      no line (as in the original); pack() folds them into LUT contents or inserts a LUT
+#   Repowering buffers at the section boundaries are not pips: a buffer is never off, its direction follows
+#   from the routing (xc2064db.graph.bidi_bit).
+#   Timing: CLB and IOB from the Data Books 1993 and 1994 (speed grades -50, -70, -100, -130), interconnect
+#   as an RC model as in the datasheet (Interconnect Performance), see DATABOOK and set_timings().
 from os import path
 import re
 import sys
@@ -54,10 +54,10 @@ from xc2064db import packages  # noqa: E402
 N_CLB = 8
 X = N_CLB + 2
 Y = N_CLB + 2
-LAST = N_CLB + 1           # Index der 9. Switch-Matrix-Spalte/-Zeile
+LAST = N_CLB + 1           # index of the 9th switch matrix column/row
 LETTERS = "ABCDEFGHI"
 
-# Pads nach Shirriffs iob.js: (Pin, Kachel Zeile+Spalte, Anschlussrichtung)
+# Pads as in Shirriff's iob.js: (pin, tile row+column, connection direction)
 PADS = [
     ("P9", "AA", "topleft"), ("P8", "AB", "topright"), ("P7", "AB", "topleft"), ("P6", "AC", "topright"),
     ("P5", "AC", "topleft"), ("P4", "AD", "topright"), ("P3", "AD", "topleft"), ("P2", "AE", "topright"),
@@ -83,7 +83,7 @@ PADS = [
 
 
 def pad_info(pin, tile, style):
-    """Kachel (x, y), z und Seite eines Pads im Modellraster; z = 1 für das zweite Pad einer Kachel
+    """Tile (x, y), z and side of a pad in the model grid; z = 1 for the second pad of a tile
     ("topright", "rightlower", ...)"""
     r, c = LETTERS.index(tile[0]) + 1, LETTERS.index(tile[1]) + 1
     z = 1 if style in ("topright", "bottomright", "rightlower", "leftlower") else 0
@@ -110,7 +110,7 @@ def has_sm(x, y):
 
 
 def tile_xy(t):
-    """Kachel 'BC' (Zeile B, Spalte C) -> (x, y); '@' ist die Pad-Reihe oben bzw. links (0)"""
+    """Tile 'BC' (row B, column C) -> (x, y); '@' is the pad row at the top or on the left (0)"""
     return ord(t[1]) - ord("@"), ord(t[0]) - ord("@")
 
 
@@ -120,28 +120,28 @@ def tile_name(x, y):
 
 PAD_BY_PIN = {p["pin"]: p for p in PAD_INFO}
 PAD_SIDE = {p[0]: p[2][0].upper() for p in PADS}  # T, B, L, R
-PAD_IN = {pin + ".I" for pin in PAD_BY_PIN}  # Eingänge der Pads (Knoten des Graphen)
+PAD_IN = {pin + ".I" for pin in PAD_BY_PIN}  # inputs of the pads (nodes of the graph)
 
 
-# --- Drahtnamen ---------------------------------------------------------------------------------
+# --- Wire names ---------------------------------------------------------------------------------
 REL = {(0, 0): "", (1, 0): "_R", (-1, 0): "_L", (0, -1): "_U", (0, 1): "_D", (-1, 1): "_LD", (1, -1): "_RU"}
 
 
 def wire_name(node, t):
-    """Name des Drahts von Graph-Knoten node in Kachel t. Senkrechte Leitungen V<k>, waagerechte H<k>,
-    Long Lines VL<k>/HL<k>; Zusatz _U/_D/_L/_R für das Stück der Nachbarkachel (oben, unten, links,
-    rechts). CLB-Pins heißen wie der Pin, X/Y der Nachbar-CLBs XT (X darüber), XB (X darunter), YL (Y links)."""
+    """Name of the wire of graph node node in tile t. Vertical lines V<k>, horizontal ones H<k>,
+    Long Lines VL<k>/HL<k>; suffix _U/_D/_L/_R for the piece in the neighbouring tile (above, below, left,
+    right). CLB pins are named like the pin, X/Y of the neighbouring CLBs XT (X above), XB (X below), YL (Y left)."""
     if node in ("GCLK", "ACLK"):
         return node
-    if node.startswith("IOCLK."):  # Taktleitung der gelatchten Eingänge einer Seite
+    if node.startswith("IOCLK."):  # clock line of the latched inputs of one side
         return "IOCLK_" + node[-1]
     m = re.fullmatch(r"(P\d+)\.([IOTK])", node)
-    if m:  # IOB: in der eigenen Kachel die Bel-Drähte (Bel-Pin I = XACT .O), in der CLB der Direkteingang
+    if m:  # IOB: in its own tile the Bel wires (Bel pin I = XACT .O), in the CLB the direct input
         p = PAD_BY_PIN[m[1]]
         if tile_xy(t) == (p["x"], p["y"]):
             return "IO%d_%s" % (p["z"], {"O": "I", "I": "O", "T": "T", "K": "K"}[m[2]])
         if m[2] != "I":
-            raise ValueError("%s außerhalb der Pad-Kachel" % node)
+            raise ValueError("%s outside the pad tile" % node)
         return "P" + PAD_SIDE[m[1]]
     m = re.fullmatch(r"([A-H])([A-H])\.([ABCDKXY])", node)
     if m:
@@ -151,7 +151,7 @@ def wire_name(node, t):
         return {("X", 0, -1): "XT", ("X", 0, 1): "XB", ("Y", -1, 0): "YL"}[(m[3],) + d]
     m = re.fullmatch(r"(col|row)\.([A-I])\.(local|long)\.(\d)(?:@([A-I]))?", node)
     if not m:
-        raise ValueError("unbekannter Knoten %s" % node)
+        raise ValueError("unknown node %s" % node)
     kind, letter, lk, k, seg = m.groups()
     prefix = ("V" if kind == "col" else "H") + ("L" if lk == "long" else "") + k
     if kind == "col":
@@ -162,19 +162,19 @@ def wire_name(node, t):
 
 
 def place(cn):
-    """Kachel, in der der Pip einer Verbindung liegt"""
-    if cn.kind in ("iobo", "iobt"):  # IOB: in der Kachel des Pads
+    """Tile in which the pip of a connection lies"""
+    if cn.kind in ("iobo", "iobt"):  # IOB: in the tile of the pad
         p = PAD_BY_PIN[cn.b.split(".")[0]]
         return tile_name(p["x"], p["y"])
-    if cn.kind == "clkbuf" and cn.a not in PAD_IN:  # Taktpuffer aus einer Leitung: an seiner Ecke
+    if cn.kind == "clkbuf" and cn.a not in PAD_IN:  # clock buffer from a line: at its corner
         return "AA" if cn.b == "GCLK" else "II"
     if cn.kind in ("iobi", "clkbuf"):
         p = PAD_BY_PIN[cn.a.split(".")[0]]
         return tile_name(p["x"], p["y"])
-    if cn.kind == "iobkin":  # Takteingang eines IOB an der Leitung seiner Seite
+    if cn.kind == "iobkin":  # clock input of an IOB on the line of its side
         p = PAD_BY_PIN[cn.b.split(".")[0]]
         return tile_name(p["x"], p["y"])
-    if cn.kind == "iobk":  # K-Mux: oben und rechts an der Ecke oben rechts, unten und links unten links
+    if cn.kind == "iobk":  # K mux: top and right at the top-right corner, bottom and left at the bottom-left one
         return "AI" if cn.b[-1] in "TR" else "IA"
     if cn.kind == "mux":
         return cn.b[:2]
@@ -189,8 +189,8 @@ def place(cn):
 
 
 def timing_class(cn):
-    """Pip-Klasse: SM (Switch-Matrix) und PIP (PIP-Bit) sind Pass-Transistoren, INMUX die Eingangs-Muxe von
-    CLB und IOB, GCLK der Taktpuffer"""
+    """Pip class: SM (switch matrix) and PIP (PIP bit) are pass transistors, INMUX the input muxes of
+    CLB and IOB, GCLK the clock buffer"""
     if cn.kind == "switch":
         return "SM"
     if cn.kind in ("mux", "iobo", "iobt", "iobk"):
@@ -203,8 +203,8 @@ def timing_class(cn):
 
 
 def node_class(node):
-    """Knotenklasse für das RC-Modell: Einzelsegment, Long Line (auch die Taktleitung einer Seite für die
-    gelatchten Eingänge), Taktnetz; Pins ohne"""
+    """Node class for the RC model: single-length segment, Long Line (also the clock line of a side for the
+    latched inputs), clock net; none for pins"""
     if node in ("GCLK", "ACLK"):
         return "CLKNET"
     if node.startswith("IOCLK."):
@@ -213,13 +213,13 @@ def node_class(node):
     return ("LONG" if m[2] == "long" else "SEG") if m else ""
 
 
-PIP_CFG, PIP_CLKBUF = 1, 2  # Art der Zusatzdaten eines Pips
+PIP_CFG, PIP_CLKBUF = 1, 2  # kind of a pip's extra data
 
 
 @dataclass
 class PipExtra(BBAStruct):
-    """Zusatzdaten eines Pips aus dem Graphen: die Zeile im Textformat (xc2064db/config.py), die ihn
-    programmiert (nextpnr --vopt out=), und die Art (Taktpuffer-Eingang: mit --vopt noclkbuf gesperrt)"""
+    """Extra data of a pip from the graph: the line in the text format (xc2064db/config.py) that
+    programs it (nextpnr --vopt out=), and the kind (clock buffer input: blocked with --vopt noclkbuf)"""
     cfg: IdString
     kind: int
 
@@ -235,16 +235,16 @@ class Builder:
     def __init__(self, ch):
         self.ch = ch
         self.graph = Graph()
-        self.wires = {}  # (x, y) -> {Name: Typ}
-        self.pips = {}  # (x, y) -> {(src, dst): Klasse}
-        self.pip_cfg = {}  # (x, y, src, dst) -> (Textzeile, Art)
-        self.node_wires = {}  # Knoten -> [(x, y, Name)]
+        self.wires = {}  # (x, y) -> {name: type}
+        self.pips = {}  # (x, y) -> {(src, dst): class}
+        self.pip_cfg = {}  # (x, y, src, dst) -> (text line, kind)
+        self.node_wires = {}  # node -> [(x, y, name)]
 
     def wire(self, xy, name, typ):
-        """Draht anlegen; ROUTING (aus dem Graphen) weicht einem genaueren Typ (CLB_IN, ...)"""
+        """Create a wire; ROUTING (from the graph) gives way to a more specific type (CLB_IN, ...)"""
         old = self.wires.setdefault(xy, {}).get(name)
         if old not in (None, "ROUTING", typ) and typ != "ROUTING":
-            raise ValueError("Draht %s in %s mit zwei Typen %s, %s" % (name, xy, old, typ))
+            raise ValueError("wire %s in %s with two types %s, %s" % (name, xy, old, typ))
         if old in (None, "ROUTING"):
             self.wires[xy][name] = typ
 
@@ -254,7 +254,7 @@ class Builder:
             lst.append((xy[0], xy[1], name))
         owner = self.wire_owner.setdefault((xy, name), node)
         if owner != node:
-            raise ValueError("Draht %s in %s gehört zu %s und %s" % (name, xy, owner, node))
+            raise ValueError("wire %s in %s belongs to %s and %s" % (name, xy, owner, node))
 
     def pip(self, xy, src, dst, cls):
         self.pips.setdefault(xy, {})[(src, dst)] = cls
@@ -271,21 +271,21 @@ class Builder:
             cls = timing_class(cn)
             cfg = (self.graph.cfg(cn), PIP_CLKBUF if cn.kind == "clkbuf" else PIP_CFG)
             self.pip(xy, a, b, cls)
-            if cfg[0] is not None:  # feste Verbindung (iobkin): keine Zeile im Textformat
+            if cfg[0] is not None:  # hard-wired connection (iobkin): no line in the text format
                 self.pip_cfg[xy + (a, b)] = cfg
-            if cn.kind in ("pip", "switch", "junction"):  # Pass-Transistor: beide Richtungen
+            if cn.kind in ("pip", "switch", "junction"):  # pass transistor: both directions
                 self.pip(xy, b, a, cls)
                 self.pip_cfg[xy + (b, a)] = cfg
 
     @staticmethod
     def direct_xy(cn):
-        """X/Y einer Rand-CLB direkt im Ausgangs-Mux eines IOB: Draht IO<z>_X/Y in der Pad-Kachel"""
+        """X/Y of an edge CLB directly in the output mux of an IOB: wire IO<z>_X/Y in the pad tile"""
         if cn.kind == "iobo" and re.fullmatch(r"[A-H][A-H]\.[XY]", cn.a):
             return "IO%d_%s" % (PAD_BY_PIN[cn.b.split(".")[0]]["z"], cn.a[-1])
         return None
 
     def clb(self, x, y):
-        """Bels und interne Pips einer CLB (LOCAL: Teil der Laufzeit der Logik, XYDRV: Ausgangstreiber)"""
+        """Bels and internal pips of a CLB (LOCAL: part of the logic delay, XYDRV: output driver)"""
         xy = (x, y)
         for p in "ABCDK":
             self.wire(xy, p, "CLB_IN")
@@ -301,13 +301,13 @@ class Builder:
                 w = "%s_I%d" % (name, i)
                 self.wire(xy, w, "LUT_IN")
                 pins.append(("I[%d]" % i, w, PinType.INPUT))
-                for s in (lut_in[i] if i < 3 else ("B",)):  # FG: I[3] = B wählt zwischen F und G
+                for s in (lut_in[i] if i < 3 else ("B",)):  # FG: I[3] = B selects between F and G
                     self.pip(xy, s, w, "LOCAL")
             self.wire(xy, "%s_O" % name, "LUT_OUT")
             pins.append(("O", "%s_O" % name, PinType.OUTPUT))
             bels.append((name, "LUT%d" % n, z, pins))
-        # FGM (Mux-Modus): F und G mit eigenen Eingängen, B wählt. Dieselbe Hardware wie FG, nur stehen die
-        # Eingangs-Muxe von F und G verschieden; der Bel nutzt daher die Leitungen von F, G und FG.
+        # FGM (mux mode): F and G with their own inputs, B selects. The same hardware as FG, only the input muxes
+        # of F and G are set differently; the Bel therefore uses the wires of F, G and FG.
         bels.append(("FGM", "FGM", 4, [("%s[%d]" % (h, i), "%s_I%d" % (h, i), PinType.INPUT)
                                        for h in "FG" for i in range(3)]
                      + [("S", "FG_I3", PinType.INPUT), ("O", "FG_O", PinType.OUTPUT)]))
@@ -317,9 +317,9 @@ class Builder:
                      ("K", "FF_CLK"),
                      ("A", "FF_S"), ("F_O", "FF_S"), ("FG_O", "FF_S"),
                      ("D", "FF_R"), ("G_O", "FF_R"), ("FG_O", "FF_R")):
-            # Set/Reset direkt von A bzw. D: T_RIO statt T_RLO (Pip-Klasse SRDIR, siehe clb_timing)
+            # set/reset directly from A or D: T_RIO instead of T_RLO (pip class SRDIR, see clb_timing)
             self.pip(xy, s, d, "SRDIR" if (s, d) in (("A", "FF_S"), ("D", "FF_R")) else "LOCAL")
-        for s, cls in (("C", "CLKC"), ("G_O", "CLKG"), ("FG_O", "CLKG")):  # Takt über C bzw. G
+        for s, cls in (("C", "CLKC"), ("G_O", "CLKG"), ("FG_O", "CLKG")):  # clock via C or G
             self.pip(xy, s, "FF_CLK", cls)
         bels.append(("FF", "DFF", 3, [("D", "FF_D", PinType.INPUT), ("CLK", "FF_CLK", PinType.INPUT),
                                      ("S", "FF_S", PinType.INPUT), ("R", "FF_R", PinType.INPUT),
@@ -329,8 +329,8 @@ class Builder:
                 self.pip(xy, s, o, "XYDRV")
 
     def iob(self, p):
-        """IOB-Pad: Bel und Drähte. Seine Muxe und Pips kommen aus dem Graphen (iob.js, routing()); der
-        Modus an/aus/Tristate folgt aus dem Zelltyp (pack() in xc2064.cc), T hat daher keine Konstanten."""
+        """IOB pad: Bel and wires. Its muxes and pips come from the graph (iob.js, routing()); the
+        mode on/off/tristate follows from the cell type (pack() in xc2064.cc), T therefore has no constants."""
         xy, z = (p["x"], p["y"]), p["z"]
         for sfx, typ in (("I", "IO_I"), ("T", "IO_T"), ("O", "IO_O"), ("K", "IO_K"), ("PAD", "IO_PAD")):
             self.wire(xy, "IO%d_%s" % (z, sfx), typ)
@@ -356,7 +356,7 @@ class Builder:
                 for name, typ in sorted(self.wires.get(xy, {}).items()):
                     w = tt.create_wire(name, typ)
                     node = self.wire_owner.get((xy, name))
-                    if node and len(self.node_wires[node]) == 1 and node_class(node):  # Knoten aus einem Draht
+                    if node and len(self.node_wires[node]) == 1 and node_class(node):  # node of a single wire
                         w.timing_idx = ch.timing.node_class_idx(node_class(node))
                 for name, typ, z, pins in self.bels.get(xy, []):
                     bel = tt.create_bel(name, typ, z=z)
@@ -367,11 +367,11 @@ class Builder:
                     cfg = self.pip_cfg.get(xy + (src, dst))
                     if cfg:
                         pp.extra_data = PipExtra(ch.strs.id(cfg[0]), cfg[1])
-                if has_sm(x, y) and not (x in (1, LAST) and y in (1, LAST)):  # zuerst: Index = Matrix 8.1/8.2
+                if has_sm(x, y) and not (x in (1, LAST) and y in (1, LAST)):  # first: index = matrix 8.1/8.2
                     tt.create_group("SM0", "SWITCHBOX")
                     tt.create_group("SM1", "SWITCHBOX")
                 if is_clb(x, y):
-                    tt.create_group("CLB", "CLB_FRAME")  # nur für die GUI: Rahmen der CLB
+                    tt.create_group("CLB", "CLB_FRAME")  # GUI only: frame of the CLB
                 ch.set_tile_type(x, y, "T_X%dY%d" % (x, y))
         for node, wires in self.node_wires.items():
             if len(wires) > 1:
@@ -379,10 +379,10 @@ class Builder:
 
 
 # --- Timing ----------------------------------------------------------------------------------------
-# Werte aus dem Xilinx Programmable Logic Data Book, XC2000 "CLB Switching Characteristic Guidelines" und
-# "IOB Switching Guidelines", in ns, Maximalwerte. Die Stufe ist die Umlaufrate eines FF in MHz. -50 aus
-# dem Data Book 1993 (S. 2-213, 2-214; den XC2064 im PD48 gab es nur so, S. 2-208), -130 aus dem von 1994
-# (S. 2-221, 2-222). -70 und -100 stehen in beiden gleich.
+# Values from the Xilinx Programmable Logic Data Book, XC2000 "CLB Switching Characteristic Guidelines" and
+# "IOB Switching Guidelines", in ns, maximum values. The speed grade is the toggle rate of an FF in MHz. -50
+# from the 1993 Data Book (pp. 2-213, 2-214; the XC2064 in the PD48 was only available in this grade, p. 2-208),
+# -130 from the 1994 one (pp. 2-221, 2-222). -70 and -100 are the same in both.
 DATABOOK = {
     #       T_ILO T_QLO T_CKO T_ICK T_CCO T_CIO T_PID T_OP T_THZ T_TON T_LI T_PL T_LP T_ITO T_RIO T_RLO
     "50": (15.0, 8.0, 15.0, 9.0, 19.0, 27.0, 8.0, 12.0, 20.0, 20.0, 15.0, 8.0, 0.0, 20.0, 22.0, 28.0),
@@ -393,14 +393,14 @@ DATABOOK = {
 
 
 def clb_timing(t):
-    """Tabellenwerte auf das Modell verteilen (ps). T_ILO gilt vom PIP am CLB-Eingang bis zum Ausgang im
-    Kanal, schließt also Eingangs-Mux und Ausgangstreiber ein; T_QLO (Q über F/G zum Ausgang) ist die Laufzeit
-    der Funktion selbst. Daraus: LUT = T_QLO, Ausgangstreiber = T_ILO - T_QLO, Clock-to-Q = T_CKO - Treiber,
-    Setup an D = T_ICK - LUT (nicht negativ), Takt über C bzw. G später als über K. Gelatchter Eingang des IOB:
-    Takt bis Eingang T_LI, Setup und Hold am Pad T_PL, T_LP.
-    Transparentes Latch: T_ITO = Eingang über F und das Latch zum Ausgang, also D -> Q = T_ITO - T_ILO.
-    Set/Reset: über F bzw. G (T_RLO = LUT + S/R -> Q + Treiber) ergibt S/R -> Q = T_RLO - T_ILO; direkt von A
-    bzw. D (T_RIO) ist der Weg um T_RIO - T_RLO + T_QLO länger als ohne LUT (Pip-Klasse SRDIR)."""
+    """Distribute the table values over the model (ps). T_ILO applies from the PIP at the CLB input to the output
+    in the channel, so it includes the input mux and the output driver; T_QLO (Q via F/G to the output) is the
+    delay of the function itself. Hence: LUT = T_QLO, output driver = T_ILO - T_QLO, clock-to-Q = T_CKO - driver,
+    setup at D = T_ICK - LUT (not negative), clock via C or G later than via K. Latched input of the IOB:
+    clock to input T_LI, setup and hold at the pad T_PL, T_LP.
+    Transparent latch: T_ITO = input via F and the latch to the output, so D -> Q = T_ITO - T_ILO.
+    Set/reset: via F or G (T_RLO = LUT + S/R -> Q + driver) gives S/R -> Q = T_RLO - T_ILO; directly from A
+    or D (T_RIO) the path is longer by T_RIO - T_RLO + T_QLO than without a LUT (pip class SRDIR)."""
     ilo, qlo, cko, ick, cco, cio = t[:6]
     out = ilo - qlo
     ps = lambda v: int(round(max(v, 0) * 1000))  # noqa: E731
@@ -409,21 +409,21 @@ def clb_timing(t):
                 pl=ps(t[11]), lp=ps(t[12]), dq=ps(t[13] - ilo), sr=ps(t[15] - ilo), srdir=ps(t[14] - t[15] + qlo))
 
 
-# Interconnect: Das Data Book nennt keine Zahlen, nur das Modell ("Interconnect Performance"): eine Kette von
-# Pass-Transistoren ist eine Kette von RC-Gliedern (Widerstand jedes Schalters mal die Kapazität dahinter),
-# die an jedem Treiber neu beginnt. In nextpnr: Schalter (SM, PIP, Eingangs-Mux) unbuffered mit Widerstand
-# R_SW, die Leitungen mit ihrer Kapazität; CLB-Ausgang und Taktpuffer sind Treiber. Geschätzt für -70: ein
-# Einzelsegment hinter einem Schalter etwa 0,5 ns, eine Long Line 4 ns, der Taktpuffer 4 ns; die anderen
-# Stufen im Verhältnis von T_ILO.
-R_SW, R_DRV = 2000000, 1000000  # Milliohm: Pass-Transistor, Ausgangstreiber der CLB
-C_SEG, C_LONG = 250, 2000  # Femtofarad: Einzelsegment, Long Line
-T_GCLK = 4000  # ps: Taktpuffer
+# Interconnect: the Data Book gives no numbers, only the model ("Interconnect Performance"): a chain of
+# pass transistors is a chain of RC stages (resistance of each switch times the capacitance behind it),
+# which starts anew at every driver. In nextpnr: switches (SM, PIP, input mux) unbuffered with resistance
+# R_SW, the lines with their capacitance; CLB output and clock buffer are drivers. Estimated for -70: a
+# single-length segment behind a switch about 0.5 ns, a Long Line 4 ns, the clock buffer 4 ns; the other
+# speed grades in proportion to T_ILO.
+R_SW, R_DRV = 2000000, 1000000  # milliohms: pass transistor, output driver of the CLB
+C_SEG, C_LONG = 250, 2000  # femtofarads: single-length segment, Long Line
+T_GCLK = 4000  # ps: clock buffer
 
 
 def set_timings(ch: Chip):
     tmg = ch.set_speed_grades(sorted(DATABOOK, key=int))
     for speed, table in DATABOOK.items():
-        s = table[0] / DATABOOK["70"][0]  # Interconnect im Verhältnis von T_ILO
+        s = table[0] / DATABOOK["70"][0]  # interconnect in proportion to T_ILO
         c = clb_timing(table)
         tv = lambda v: TimingValue(int(round(v)))  # noqa: E731
         for name, delay, res, cap, buffered in (
@@ -440,16 +440,16 @@ def set_timings(ch: Chip):
         for cell, ins in (("XC2000_LUT3", ["I[%d]" % i for i in range(3)]),
                           ("XC2000_LUT4", ["I[%d]" % i for i in range(4)]),
                           ("XC2000_FGM", ["%s[%d]" % (h, i) for h in "FG" for i in range(3)] + ["S"])):
-            lut = ch.timing.add_cell_variant(speed, cell)  # T_ILO hängt nicht von der Funktion ab
+            lut = ch.timing.add_cell_variant(speed, cell)  # T_ILO does not depend on the function
             for i in ins:
                 lut.add_comb_arc(i, "O", tv(c["lut"]))
-        dff = ch.timing.add_cell_variant(speed, "XC2000_DFF")  # ohne pack() (geladenes *.pnr.json)
+        dff = ch.timing.add_cell_variant(speed, "XC2000_DFF")  # without pack() (loaded *.pnr.json)
         dff.add_setup_hold("CLK", "D", ClockEdge.RISING, tv(c["setup"]), TimingValue(0))
         dff.add_clock_out("CLK", "Q", ClockEdge.RISING, tv(c["ckq"]))
-        # Varianten des Speicherelements, pack() wählt je Zelle (xc2064.cc, dff_timing): FF mit steigender bzw.
-        # fallender Flanke (FFP, FFN), Latch transparent bei Takt 1 bzw. 0 (LP, LN: Q folgt ab der öffnenden Flanke,
-        # Setup und Hold an der schließenden), dazu D -> Q (Latch, .D) und S, R -> Q (.SR) als kombinatorische
-        # Bögen; pack() lässt einen Bogen weg, wo er eine kombinatorische Schleife schlösse
+        # Variants of the storage element, pack() chooses one per cell (xc2064.cc, dff_timing): FF with rising or
+        # falling edge (FFP, FFN), latch transparent at clock 1 or 0 (LP, LN: Q follows from the opening edge,
+        # setup and hold at the closing one), plus D -> Q (latch, .D) and S, R -> Q (.SR) as combinational
+        # arcs; pack() leaves out an arc where it would close a combinational loop
         rise, fall = ClockEdge.RISING, ClockEdge.FALLING
         for kind, open_edge, close_edge in (("FFP", rise, rise), ("FFN", fall, fall), ("LP", rise, fall),
                                             ("LN", fall, rise)):
@@ -463,10 +463,10 @@ def set_timings(ch: Chip):
                     if sr_arc:
                         v.add_comb_arc("S", "Q", tv(c["sr"]))
                         v.add_comb_arc("R", "Q", tv(c["sr"]))
-        inff = ch.timing.add_cell_variant(speed, "XC2000_INFF")  # gelatchter Eingang des IOB
+        inff = ch.timing.add_cell_variant(speed, "XC2000_INFF")  # latched input of the IOB
         inff.add_setup_hold("K", "PAD", ClockEdge.RISING, tv(c["pl"]), tv(c["lp"]))
         inff.add_clock_out("K", "O", ClockEdge.RISING, tv(c["li"]))
-        # IOB: Pad -> Eingang T_PID, Ausgang -> Pad T_OP, T -> Pad der größere von T_THZ und T_TON
+        # IOB: pad -> input T_PID, output -> pad T_OP, T -> pad the larger of T_THZ and T_TON
         for cell, arcs in (("XC2000_INBUF", (("PAD", "O", "pid"),)),
                            ("XC2000_OUTBUF", (("I", "PAD", "op"),)),
                            ("XC2000_TOBUF", (("I", "PAD", "op"), ("T", "PAD", "tri"))),
@@ -477,7 +477,7 @@ def set_timings(ch: Chip):
 
 
 def set_packages(ch: Chip):
-    """Gehäuse PC68, PD48, PC44 und PG68 (xc2064db.packages): Pin-Name im Gehäuse -> IOB-Bel"""
+    """Packages PC68, PD48, PC44 and PG68 (xc2064db.packages): pin name in the package -> IOB Bel"""
     by_pin = {p["pin"]: p for p in PAD_INFO}
     for package in packages.PACKAGES:
         pkg = ch.create_package(package)

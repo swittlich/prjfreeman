@@ -1,6 +1,6 @@
-// Zustandsautomat: Fußgängerampel. Die Autos haben Grün, bis req (Taster) kommt und Grün mindestens T_GREEN Takte
-// gedauert hat; dann Gelb (T_YELLOW), Rot mit Grün für die Fußgänger (T_RED, walk), Rot-Gelb (T_YELLOW) und wieder
-// Grün. Ein gemeinsamer Zähler misst die Phasen, waiting merkt sich die Anforderung. Synchrones Reset rst.
+// State machine: pedestrian traffic light. The cars have green until req (push button) arrives and green has lasted
+// at least T_GREEN clock cycles; then yellow (T_YELLOW), red with green for the pedestrians (T_RED, walk), red-yellow
+// (T_YELLOW) and green again. A shared counter times the phases, waiting remembers the request. Synchronous reset rst.
 module ampel #(
 	parameter T_GREEN  = 40,
 	parameter T_YELLOW = 8,

@@ -1,18 +1,16 @@
-"""Netzliste aus einer Konfiguration (Bitstream): der Rückweg für den formalen Vergleich im Regressionstest.
+"""Netlist from a configuration (bitstream): the way back for the formal comparison in the regression test.
 
-Netze sind die Knoten des Routing-Graphen, die die programmierten Verbindungen zusammenschalten (Puffer an den
-Sektionsgrenzen verbinden immer). Treiber sind X/Y der CLBs und die Eingänge der Pads (Pnn.I), Senken die
-CLB-Eingänge und die Ausgangs- und T-Muxe der Pads. Aus jeder CLB entstehen die Zellen, die ihre Konfiguration
-beschreibt (blocks.py): Funktionsgeneratoren als XC2000_LUT3 (F, G), XC2000_LUT4 (BASE F, B wählt) bzw.
-XC2000_FGM (BASE FGM, B wählt zwischen F und G mit eigenen Eingängen), das Speicherelement als XC2000_DFF, wenn
-sein Takt eingeschaltet ist. Pads werden IO-Puffer nach dem Modus
-des T-Muxes (aus: INBUF, an: OUTBUF, sonst TOBUF bzw. IOBUF), ein gelatchter Eingang (I:Q) XC2000_INFF mit dem
-Takt der Leitung seiner Seite.
+Nets are the nodes of the routing graph that the programmed connections tie together (buffers at the section
+boundaries always connect). Drivers are X/Y of the CLBs and the inputs of the pads (Pnn.I), sinks are the CLB
+inputs and the output and T muxes of the pads. Each CLB yields the cells that its configuration describes
+(blocks.py): function generators as XC2000_LUT3 (F, G), XC2000_LUT4 (BASE F, B selects) or XC2000_FGM (BASE
+FGM, B selects between F and G with their own inputs), the storage element as XC2000_DFF if its clock is
+enabled. Pads become IO buffers according to the mode of the T mux (off: INBUF, on: OUTBUF, otherwise TOBUF or
+IOBUF), a latched input (I:Q) becomes XC2000_INFF with the clock of the line of its side.
 
-Der Bitstream kennt keine Namen: Ports (Pad -> Name, Richtung) und Register (CLB bzw. Pad mit gelatchtem
-Eingang -> Name des Q-Netzes) kommen
-aus den Zeilen "port" und "reg" der Textdatei, die nextpnr mit --vopt out= schreibt. Pads ohne Port bleiben
-unbenutzt.
+The bitstream knows no names: ports (pad -> name, direction) and registers (CLB or pad with a latched input ->
+name of the Q net) come from the lines "port" and "reg" of the text file that nextpnr writes with --vopt out=.
+Pads without a port remain unused.
 """
 import collections
 import re
@@ -31,7 +29,7 @@ def _find(parent, n):
 
 
 def build(db, raw, ports, regs, g=None):
-    """Verilog-Text. ports: {Pin: (Name, Richtung)}, regs: {CLB oder Pin: Name}. Fehler: ValueError."""
+    """Verilog text. ports: {pin: (name, direction)}, regs: {CLB or pin: name}. Errors: ValueError."""
     g = g or graph_mod.Graph(db.entries, db.lines)
     items, problems = config.decode(db, raw)
     if problems:
@@ -53,12 +51,12 @@ def build(db, raw, ports, regs, g=None):
     is_sink = lambda n: (re.fullmatch(r"[A-H][A-H]\.[ABCDK]|P\d+\.[OT]", n)  # noqa: E731
                          or (re.fullmatch(r"P\d+\.K", n) and latched(n[:-2])))
 
-    # Treiber je Netz; Name des Drahts = Name des Treibers
-    wire_of = {}  # Knoten -> Drahtname (nur Netze mit Treiber)
+    # driver per net; name of the wire = name of the driver
+    wire_of = {}  # node -> wire name (only nets with a driver)
     for r, nodes in members.items():
         drv = [n for n in nodes if is_driver(n)]
         if len(drv) > 1:
-            raise ValueError("Netz mit zwei Treibern: %s" % ", ".join(sorted(drv)))
+            raise ValueError("net with two drivers: %s" % ", ".join(sorted(drv)))
         if drv:
             for n in nodes:
                 wire_of[n] = drv[0]
@@ -66,10 +64,10 @@ def build(db, raw, ports, regs, g=None):
     used = lambda n: n in parent and has_sink[root(n)]  # noqa: E731
 
     cells, wires = [], set()
-    names = {}  # Treiberknoten (AB.X, P9.I) -> Name im Verilog
+    names = {}  # driver node (AB.X, P9.I) -> name in the Verilog
 
     def net(node):
-        """Draht an einem Eingangspin (CLB-Pin AB.A, Pad-Mux P9.O) oder None"""
+        """Wire at an input pin (CLB pin AB.A, pad mux P9.O) or None"""
         w = wire_of.get(node)
         if w is None:
             return None
@@ -88,7 +86,7 @@ def build(db, raw, ports, regs, g=None):
             if u and f[o] in ("F", "G"):
                 need.add(f[o])
             elif u and f[o] == "UNDEF":
-                raise ValueError("%s.%s: Ausgang UNDEF" % (t, o))
+                raise ValueError("%s.%s: output UNDEF" % (t, o))
         if has_ff:
             need.add("F")
             if clk[0] == "G":
@@ -102,20 +100,20 @@ def build(db, raw, ports, regs, g=None):
         q = regs.get(t, "%s.Q" % t)
 
         def pin(p):
-            """Signal eines CLB-Eingangs A-D bzw. Q"""
+            """Signal of a CLB input A-D or Q"""
             if p == "Q":
                 return q if has_ff else None
             return net("%s.%s" % (t, p))
 
         out = {}
-        if base == "F" and need:  # F und G als eine Funktion, B wählt (B = 1: Tabelle F)
+        if base == "F" and need:  # F and G as one function, B selects (B = 1: table F)
             ins = f["F"].split(":") + ["B"]
             init = int(f["LUTF"], 16) << 8 | int(f["LUTG"], 16)
             o = "%s.FG" % t
             cells.append(("XC2000_LUT4", "%s.LUTFG" % t, {"INIT": "16'b{:016b}".format(init)},
                           {"I": [pin(p) for p in ins], "O": o}))
             out["F"] = out["G"] = o
-        elif base == "FGM" and need:  # Mux-Modus: F und G mit eigenen Eingängen, B wählt (B = 1: F), Ausgang M
+        elif base == "FGM" and need:  # mux mode: F and G with their own inputs, B selects (B = 1: F), output M
             o = "%s.M" % t
             cells.append(("XC2000_FGM", "%s.FGM" % t, {"INIT_F": "8'b{:08b}".format(int(f["LUTF"], 16)),
                                                        "INIT_G": "8'b{:08b}".format(int(f["LUTG"], 16))},
@@ -145,12 +143,12 @@ def build(db, raw, ports, regs, g=None):
         for v in out.values():
             wires.add(v)
 
-    # IO-Puffer an den Pads mit Port
+    # IO buffers at the pads with a port
     for pin, (name, d) in sorted(ports.items(), key=lambda kv: int(kv[0][1:])):
         mode = tmode.get(pin, "off")
         if latched(pin) and mode != "off":
-            raise ValueError("%s: gelatchter Eingang mit Ausgangstreiber wird nicht nachgebildet" % pin)
-        if latched(pin):  # FF im IOB, Takt von der Leitung der Seite (K-Mux)
+            raise ValueError("%s: latched input with output driver is not modelled" % pin)
+        if latched(pin):  # FF in the IOB, clock from the line of the side (K mux)
             cells.append(("XC2000_INFF", pin + ".BUF", {}, {"PAD": ("port", name), "K": net(pin + ".K"),
                                                              "O": pin + ".I"}))
             if pin in regs:
@@ -168,7 +166,7 @@ def build(db, raw, ports, regs, g=None):
         if mode != "on":
             wires.add(pin + ".I")
 
-    # Verilog: Drähte heißen wie ihr Treiber (bzw. dessen Name aus port/reg)
+    # Verilog: wires are named after their driver (or its name from port/reg)
     esc = lambda s: "\\" + s + " "  # noqa: E731
     rename = lambda w: names.get(w, w)  # noqa: E731
     vec = re.compile(r"^(.*)\[(\d+)\]$")
@@ -197,13 +195,13 @@ def build(db, raw, ports, regs, g=None):
     for typ, inst, params, conns in cells:
         parts = []
         for p, s in conns.items():
-            if isinstance(s, list):  # Bus I[0..n], höchstes Bit zuerst
+            if isinstance(s, list):  # bus I[0..n], highest bit first
                 parts.append(".%s({%s})" % (p, ", ".join(ref(x) for x in reversed(s))))
             else:
                 parts.append(".%s(%s)" % (p, ref(s)))
         prm = ", ".join(".%s(%s)" % kv for kv in params.items())
         lines.append("\t%s %s%s (%s);" % (typ, "#(%s) " % prm if prm else "", esc(inst), ", ".join(parts)))
-    out = ["// aus dem Bitstream zurückgewonnen (arch/xc2064/xc2064db/netlist.py)",
+    out = ["// recovered from the bitstream (arch/xc2064/xc2064db/netlist.py)",
            "module top (%s);" % ", ".join(esc(b) for b in sorted(groups))]
     for base, (d, idx) in sorted(groups.items()):
         rng = "[%d:%d] " % (max(idx), min(idx)) if idx[0] is not None else ""
@@ -215,7 +213,7 @@ def build(db, raw, ports, regs, g=None):
 
 
 def read_meta(text):
-    """Zeilen port/reg aus der Textdatei von nextpnr: (ports, regs)"""
+    """Lines port/reg from nextpnr's text file: (ports, regs)"""
     ports, regs = {}, {}
     for l in config.parse_text(text):
         if l.kind == "port":

@@ -1,5 +1,5 @@
-# Pin-Zuordnung für shiftreg.v: set_io <Port> <PLCC68-Pin>
-# Takt und Steuerung oben links, din am oberen Rand, q am rechten Rand
+# Pin assignment for shiftreg.v: set_io <port> <PLCC68 pin>
+# Clock and control at the top left, din on the top edge, q on the right edge
 set_io clk    P9
 set_io load   P8
 set_io en     P7

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""xc2064xnf: Verilog (über yosys) oder yosys-JSON -> XNF-Netzliste für XACTs XC2000-Ablauf (xc2064db/xnf.py).
+"""xc2064xnf: Verilog (via yosys) or yosys JSON -> XNF netlist for XACT's XC2000 flow (xc2064db/xnf.py).
 
-    xc2064xnf design.v [mehr.v ...] -o DESIGN.XNF [--pcf design.pcf] [--top top] [--lut] [--json design.json]
+    xc2064xnf design.v [more.v ...] -o DESIGN.XNF [--pcf design.pcf] [--top top] [--lut] [--json design.json]
     xc2064xnf design.json -o DESIGN.XNF [...]
 
-Ein .v synthetisiert yosys (YOSYS=..., Skript in xnf.yosys_script) flach zu einfachen Gattern und FFs bzw. Latches,
-die Abbildung auf CLBs macht XNFMAP. Mit --lut bildet ABC die Logik schon auf LUTs mit bis zu 4 Eingängen ab
-(EQN-Symbole). Pins aus der PCF-Datei (Standard: design.pcf neben design.v wie bei flow.sh) werden LOC=Pxx.
-Takte, die nur Speicherelemente takten, laufen über GCLK und ACLK (--gclk/--aclk legen fest, --noclkbuf sperrt),
-mit --iobff gehen FFs direkt hinter einem Eingang ins IOB.
-Danach in DOSBox (DOS kennt nur Namen im 8.3-Format):
+yosys synthesizes a .v (YOSYS=..., script in xnf.yosys_script) flat into simple gates and FFs or latches,
+XNFMAP does the mapping onto CLBs. With --lut, ABC already maps the logic onto LUTs with up to 4 inputs
+(EQN symbols). Pins from the PCF file (default: design.pcf next to design.v, as with flow.sh) become LOC=Pxx.
+Clocks that only clock storage elements go through GCLK and ACLK (--gclk/--aclk choose, --noclkbuf disables),
+with --iobff FFs directly behind an input go into the IOB.
+Then in DOSBox (DOS only knows 8.3 file names):
 
     XNFMERGE DESIGN.XNF DESIGN.XFF
     XNFPREP DESIGN.XFF DESIGN.XTF
@@ -28,40 +28,40 @@ from xc2064db import packages, xnf  # noqa: E402
 
 
 def synthesize(files, top, lut, keep):
-    """yosys-JSON für Verilog-Dateien (keep: JSON zusätzlich dort ablegen)"""
+    """yosys JSON for Verilog files (keep: also store the JSON there)"""
     with tempfile.TemporaryDirectory() as tmp:
         json_file = keep or os.path.join(tmp, "design.json")
         cmd = [os.environ.get("YOSYS", "yosys"), "-q", "-p", xnf.yosys_script(top, lut, json_file)] + files
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode:
-            sys.exit("xc2064xnf: yosys bricht ab:\n%s%s" % (r.stdout, r.stderr))
+            sys.exit("xc2064xnf: yosys failed:\n%s%s" % (r.stdout, r.stderr))
         return json.load(open(json_file))
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("design", nargs="+", help="Verilog-Dateien oder eine JSON-Netzliste von yosys")
+    ap.add_argument("design", nargs="+", help="Verilog files or a JSON netlist from yosys")
     ap.add_argument("-o", "--output", required=True, help=".XNF")
-    ap.add_argument("--top", help="oberstes Modul (Standard: von yosys bestimmt)")
-    ap.add_argument("--pcf", help="Pins (set_io <Port> <Pin>); Standard: design.pcf neben dem ersten .v")
-    ap.add_argument("--lut", action="store_true", help="Logik als LUTs mit bis zu 4 Eingängen statt als Gatter")
-    ap.add_argument("--json", help="JSON-Netzliste von yosys hier ablegen")
-    ap.add_argument("--package", default="PC68", help="Gehäuse (%s, Standard PC68)" % ", ".join(packages.PACKAGES))
-    ap.add_argument("--speed", default="-70", help="Geschwindigkeitsstufe wie bei XACT (Standard -70)")
-    ap.add_argument("--gclk", metavar="PORT", help="Eingang (wie im Verilog, z.B. clk) über GCLK")
-    ap.add_argument("--aclk", metavar="PORT", help="Eingang über ACLK")
-    ap.add_argument("--noclkbuf", action="store_true", help="Taktpuffer nur mit --gclk/--aclk")
-    ap.add_argument("--iobff", action="store_true", help="FFs direkt hinter einem Eingang ins IOB (INFF) wie "
-                    "xc2064_iobff; ohne macht das XNFMAP nicht")
+    ap.add_argument("--top", help="top module (default: determined by yosys)")
+    ap.add_argument("--pcf", help="pins (set_io <port> <pin>); default: design.pcf next to the first .v")
+    ap.add_argument("--lut", action="store_true", help="logic as LUTs with up to 4 inputs instead of gates")
+    ap.add_argument("--json", help="store the JSON netlist from yosys here")
+    ap.add_argument("--package", default="PC68", help="package (%s, default PC68)" % ", ".join(packages.PACKAGES))
+    ap.add_argument("--speed", default="-70", help="speed grade as in XACT (default -70)")
+    ap.add_argument("--gclk", metavar="PORT", help="input (as in the Verilog, e.g. clk) via GCLK")
+    ap.add_argument("--aclk", metavar="PORT", help="input via ACLK")
+    ap.add_argument("--noclkbuf", action="store_true", help="clock buffers only with --gclk/--aclk")
+    ap.add_argument("--iobff", action="store_true", help="FFs directly behind an input into the IOB (INFF), like "
+                    "xc2064_iobff; without it XNFMAP does not do this")
     args = ap.parse_args()
 
     package = args.package.upper()
     if package not in packages.PACKAGES:
-        sys.exit("xc2064xnf: unbekanntes Gehäuse %s (%s)" % (package, ", ".join(packages.PACKAGES)))
+        sys.exit("xc2064xnf: unknown package %s (%s)" % (package, ", ".join(packages.PACKAGES)))
     first = args.design[0]
     if first.endswith(".json"):
         if len(args.design) > 1:
-            sys.exit("xc2064xnf: nur eine JSON-Netzliste")
+            sys.exit("xc2064xnf: only one JSON netlist")
         netlist = json.load(open(first))
     else:
         netlist = synthesize(args.design, args.top, args.lut, args.json)
@@ -79,7 +79,7 @@ def main():
     print("xc2064xnf: %s (%s) -> %s: %s%s%s" % (
         os.path.basename(first), top, os.path.basename(args.output),
         ", ".join("%d %s" % (n, k) for k, n in stats.items() if n),
-        ", " + ", ".join(clkbufs) if clkbufs else "", ", Pins aus " + os.path.basename(pcf) if pcf else ""),
+        ", " + ", ".join(clkbufs) if clkbufs else "", ", pins from " + os.path.basename(pcf) if pcf else ""),
         file=sys.stderr)
 
 
