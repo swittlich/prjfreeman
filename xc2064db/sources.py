@@ -1,12 +1,13 @@
-"""Pfade der Submodules und Lesen ihrer Dateien. Pfade hängen an os.path.realpath(__file__), damit das Paket
-auch über den Symlink in upstream/nextpnr gefunden wird. Zeilenenden (CRLF in Shirriffs Dateien) werden
-vereinheitlicht."""
+"""Pfade der Submodules (unter external/) und Lesen ihrer Dateien. Pfade hängen an os.path.realpath(__file__),
+damit das Paket auch über den Symlink in upstream/nextpnr gefunden wird. Zeilenenden (CRLF in Shirriffs
+Dateien) werden vereinheitlicht."""
 import hashlib
 import os
 
 ARCH = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-SHIRRIFF = os.path.join(ARCH, "shirriff-xc2064")
-OPENXC = os.path.join(ARCH, "openxc2064")
+EXTERNAL = os.path.join(ARCH, "external")
+SHIRRIFF = os.path.join(EXTERNAL, "shirriff-xc2064")
+OPENXC = os.path.join(EXTERNAL, "openxc2064")
 
 DEF_TXT = os.path.join(SHIRRIFF, "html", "XC2064-def.txt")
 DRAW_JS = os.path.join(SHIRRIFF, "html", "draw.js")

@@ -1,7 +1,7 @@
 # Chip-Datenbank für ein Modell des Xilinx XC2064 (1985, das erste FPGA) als Himbächel-uarch.
 #
 # Grundlagen: XC2000-Datenblatt; Ken Shirriffs Reverse Engineering (github.com/shirriff/xc2064, als
-# Submodule shirriff-xc2064) mit der Bitkarte XC2064-def.txt, den Leitungsnamen (draw.js), den
+# Submodule external/shirriff-xc2064) mit der Bitkarte XC2064-def.txt, den Leitungsnamen (draw.js), den
 # CLB-Eingangs-Muxen (clb.js) und den IOB-Muxen (iob.js). Das Paket xc2064db (arch/xc2064/xc2064db) liest
 # diese Daten; der Routing-Graph entsteht aus xc2064db.graph, jeder Pip dort entspricht einem Bit bzw.
 # einem Mux-Code des Originals.

@@ -15,11 +15,15 @@
 #   Shirriff  unabhängige Gegenprobe: Shirriffs Decoder (xc2064shirriff, JavaScript in QuickJS) liest die
 #          RBT-Datei selbst und dekodiert CLBs, Muxe, IOBs, Pips und Switch-Matrizen wie das Paket
 #          (- ohne das Python-Paket quickjs)
+#   LCA    xc2064lca schreibt die Konfiguration als LCA für MAKEBITS, deren Blöcke und Netze zum Bitstream
+#          passen (check_xact.py; MAKEBITS selbst läuft nur in DOSBox, außerhalb des Tests)
 #   Fmax   kleinste Frequenz aller Takte nach dem Routing, mit FMIN=… (MHz) ist ein Wert darunter ein Fehler
 #   Routing  Iterationen und Laufzeit von router2 (nur Information)
 # Dazu je Design ein Lauf ohne PCF in jedem weiteren Gehäuse (Spalte PCF: PD48, PC44, PG68) und je ein Lauf
 # mit und ohne PCF ohne die Taktpuffer (--vopt noclkbuf, Spalte Seed: noclkbuf). Bitstream verlangt
 # zusätzlich, dass die Konfiguration einen Taktpuffer benutzt, bei noclkbuf keinen.
+# Danach je Design die XNF-Netzliste für XACT (xc2064xnf) aus Gattern, mit --lut und mit --iobff, geprüft
+# mit check_xact.py (Aufbau, Treiber, Pads, Speicherelemente und Pads wie bei synth_xc2064, LOC aus der PCF).
 # Umgebungsvariablen: SEEDS="1 2 3 4 5 6" (zusätzlich zum nextpnr-Standard), PACKAGES="PD48 PC44 PG68",
 # FREQ=5, FMIN=…, TIMEOUT=300, YOSYS=…, NEXTPNR=…, TEST_JOBS (parallele Läufe, Standard JOBS, höchstens 10)
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -108,14 +112,14 @@ make -s -C "$ARCH/yosys"
 mkdir -p "$OUT"
 runs=0
 failed=0
-row() { printf '%-10s %-5s %-8s %-8s %-6s %-6s %-10s %-9s %-11s %s\n' "$@"; }
+row() { printf '%-10s %-5s %-8s %-8s %-6s %-6s %-10s %-9s %-6s %-11s %s\n' "$@"; }
 # Shirriffs Decoder braucht das Python-Paket quickjs; ohne es bleibt die Spalte leer (-)
 SHIRRIFF=1
 python3 -c "import quickjs" 2>/dev/null || {
 	SHIRRIFF=0
 	warn "Python-Paket quickjs fehlt: keine Gegenprobe mit Shirriffs Decoder (pip install quickjs)"
 }
-row Design PCF Seed PnR Netz Pips Bitstream Shirriff Fmax Routing
+row Design PCF Seed PnR Netz Pips Bitstream Shirriff LCA Fmax Routing
 # bitstream <run>: Text -> RBT -> (unpack -> pack bitgenau) -> Netzliste -> Vergleich mit dem RTL
 bitstream() {
 	local t="$ARCH/tools"
@@ -135,7 +139,7 @@ pnr_run() {
 	XC2064_EXTRACT="$run.extracted.v" timeout "$TIMEOUT" "$NEXTPNR" --device XC2064 --json "$dir/$name.json" \
 		--write "$run.pnr.json" -l "$run.nextpnr.log" --freq "${FREQ:-5}" --timing-allow-fail \
 		--vopt "out=$run.cfg.txt" --post-route "$HERE/extract_netlist.py" "$@" >"$run.out" 2>&1 || rc=$?
-	local pnr=ok net=- pips=- bit=- shir=- f=
+	local pnr=ok net=- pips=- bit=- shir=- lca=- f=
 	if [[ $rc -eq 124 ]]; then
 		pnr=Timeout
 	elif [[ $rc -ne 0 ]]; then
@@ -162,9 +166,16 @@ pnr_run() {
 			shir=ok
 			python3 "$ARCH/tools/xc2064shirriff" "$run.rbt" 2>"$run.shirriff.log" || shir=FEHLER
 		fi
+		# LCA für MAKEBITS: Blöcke und Netze wie im Bitstream
+		if [[ -f "$run.rbt" ]]; then
+			lca=ok
+			{ python3 "$ARCH/tools/xc2064lca" "$run.cfg.txt" -o "$run.lca" &&
+				python3 "$HERE/check_xact.py" lca "$run.lca" "$run.cfg.txt" "$run.rbt"; } >"$run.lca.log" 2>&1 ||
+				lca=FEHLER
+		fi
 	fi
 	local bad=0
-	[[ $pnr == ok && $net == ok && $pips == ok && $bit == ok && $shir != FEHLER ]] || bad=1
+	[[ $pnr == ok && $net == ok && $pips == ok && $bit == ok && $shir != FEHLER && $lca != FEHLER ]] || bad=1
 	if [[ -n "${FMIN:-}" && -n "$f" ]] && awk -v f="$f" -v m="$FMIN" 'BEGIN { exit !(f < m) }'; then
 		f="$f<$FMIN"
 		bad=1
@@ -173,12 +184,13 @@ pnr_run() {
 	local it t
 	it="$(grep -o 'iter=[0-9]*' "$run.nextpnr.log" 2>/dev/null | tail -1 | cut -d= -f2 || true)"
 	t="$(grep -o 'Router2 time [0-9.]*' "$run.nextpnr.log" 2>/dev/null | awk '{ printf "%.0f", $3 }' || true)"
-	row "$name" "$m" "$s" "$pnr" "$net" "$pips" "$bit" "$shir" "${f:+$f MHz}" "${it:+$it It. ${t:-?} s}"
+	row "$name" "$m" "$s" "$pnr" "$net" "$pips" "$bit" "$shir" "$lca" "${f:+$f MHz}" "${it:+$it It. ${t:-?} s}"
 	echo "$bad" >"$run.bad"
 }
 
 # Warteschlange der Läufe (je Lauf Design-Verzeichnis, Name, Gold, Lauf, Spalten, Optionen getrennt durch \x1f)
 q_dir=() q_name=() q_gold=() q_run=() q_m=() q_s=() q_opts=()
+xnf_d=() # Designs für die XNF-Prüfung (Synthese bestanden)
 queue() {
 	q_dir+=("$dir") q_name+=("$name") q_gold+=("$gold") q_run+=("$1") q_m+=("$2") q_s+=("$3")
 	shift 3
@@ -218,6 +230,7 @@ for d in "${designs[@]}"; do
 		failed=$((failed + 1))
 		continue
 	fi
+	xnf_d+=("$d")
 	pcf="${d%.v}.pcf"
 	modes=(ohne)
 	[[ -f "$pcf" ]] && modes=(mit ohne)
@@ -281,7 +294,57 @@ while [[ $(jobs -rp | wc -l) -gt 0 ]]; do
 	flush
 done
 flush
+
+# XNF für XACT (xc2064xnf) je Design in drei Fassungen: aus Gattern, mit --lut (Logik als EQN) und mit
+# --iobff (FFs hinter Eingängen im IOB wie xc2064_iobff), jede geprüft mit check_xact.py. XNFMAP selbst läuft
+# nur in DOSBox, außerhalb des Tests.
+xnf_variants=(Gatter LUT iobff)
+xrow() { printf '%-10s %-7s %-7s %s\n' "$@"; }
+xnf_run() {
+	local d="$1" dir="$2" name="$3" v f res=() bad=0 pcf=() flags=()
+	[[ -f "${d%.v}.pcf" ]] && pcf=(--pcf "${d%.v}.pcf")
+	for v in "${xnf_variants[@]}"; do
+		flags=()
+		[[ $v == LUT ]] && flags=(--lut)
+		[[ $v == iobff ]] && flags=(--iobff)
+		f="$dir/xnf-$v"
+		if YOSYS="$YOSYS" python3 "$ARCH/tools/xc2064xnf" "$d" -o "$f.xnf" "${flags[@]}" >"$f.log" 2>&1 &&
+			python3 "$HERE/check_xact.py" xnf "$f.xnf" "$dir/yosys.log" "${flags[@]}" "${pcf[@]}" >>"$f.log" 2>&1; then
+			res+=(ok)
+		else
+			res+=(FEHLER)
+			bad=$((bad + 1))
+		fi
+	done
+	xrow "$name" "${res[@]}"
+	echo "$bad" >"$dir/xnf.bad"
+}
+xnf_n=0
+if [[ ${#xnf_d[@]} -gt 0 ]]; then
+	echo
+	xrow XNF "${xnf_variants[@]}"
+	for ((i = 0; i < ${#xnf_d[@]}; i++)); do
+		while [[ $(jobs -rp | wc -l) -ge $TEST_JOBS ]]; do
+			wait -n || true
+		done
+		d="${xnf_d[i]}" name="$(basename "${xnf_d[i]%.v}")"
+		rm -f "$OUT/$name"/xnf-* "$OUT/$name/xnf.bad"
+		xnf_run "$d" "$OUT/$name" "$name" >"$rows/xnf-$i.row" 2>/dev/null &
+	done
+	wait
+	for ((i = 0; i < ${#xnf_d[@]}; i++)); do
+		name="$(basename "${xnf_d[i]%.v}")"
+		xnf_n=$((xnf_n + ${#xnf_variants[@]}))
+		if [[ -s "$rows/xnf-$i.row" && -f "$OUT/$name/xnf.bad" ]]; then
+			cat "$rows/xnf-$i.row"
+			failed=$((failed + $(cat "$OUT/$name/xnf.bad")))
+		else
+			xrow "$name" "abgebrochen ($OUT/$name/xnf-*)"
+			failed=$((failed + ${#xnf_variants[@]}))
+		fi
+	done
+fi
 rm -rf "$rows"
 
-log "$runs Läufe, $failed fehlgeschlagen ($TEST_JOBS parallel). Logs: $OUT"
+log "$runs Läufe und $xnf_n XNF-Netzlisten, $failed fehlgeschlagen ($TEST_JOBS parallel). Logs: $OUT"
 [[ $failed -eq 0 ]]

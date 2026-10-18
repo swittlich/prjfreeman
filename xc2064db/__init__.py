@@ -1,5 +1,5 @@
-"""Daten des XC2064 aus den beiden Submodules, als gemeinsame Grundlage für den Chipdb-Generator (Namen und
-Verbindungen) und die Bitstream-Werkzeuge xc2064unpack/xc2064pack (Bitkarte).
+"""Daten des XC2064 aus den Submodules in external/, als gemeinsame Grundlage für den Chipdb-Generator
+(Namen und Verbindungen) und die Bitstream-Werkzeuge xc2064unpack/xc2064pack (Bitkarte).
 
 Quellen (siehe README):
   shirriff-xc2064  Ken Shirriffs Reverse Engineering: XC2064-def.txt (alle 11.360 Bits), Leitungsnamen

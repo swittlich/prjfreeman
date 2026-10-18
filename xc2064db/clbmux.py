@@ -11,8 +11,6 @@ ersetzt replace() jeweils nur das erste Vorkommen.
 """
 import collections
 
-from . import bitmap
-
 Source = collections.namedtuple("Source", "index line col row g name")
 
 

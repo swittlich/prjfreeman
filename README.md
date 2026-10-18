@@ -19,12 +19,13 @@ Grundlagen:
 - dasselbe von 1993 ([bitsavers](https://ftp.mirrorservice.org/sites/www.bitsavers.org/components/xilinx/_dataBooks/1993_Xilinx_Programmable_Logic_Data_Book.pdf)),
   S. 2-208 bis 2-214: dieselben Tabellen mit -50, -70 und -100
 - `MAKEBITS` aus Xilinx XACT 5.2.0 als Blackbox (in DOSBox, außerhalb des Repos): Codes der
-  Taktpuffer-Eingänge und Gegenprobe für `xc2064pack` (siehe [Taktpuffer](#taktpuffer-eingänge-makebits))
+  Taktpuffer-Eingänge und Gegenprobe für `xc2064pack` (siehe [Taktpuffer](#taktpuffer-eingänge-makebits));
+  `XNFMAP` und `MAP2LCA` als Vergleich für die Abbildung auf CLBs (siehe [XNF für XACT](#xnf-für-xact-toolsxc2064xnf))
 
-Beide Repos sind Submodules unter `arch/xc2064` (siehe [Datenquellen](#datenquellen-und-bitstream-werkzeuge)):
+Beide Repos sind Submodules unter `arch/xc2064/external` (siehe [Datenquellen](#datenquellen-und-bitstream-werkzeuge)):
 
 ```bash
-git submodule update --init arch/xc2064/shirriff-xc2064 arch/xc2064/openxc2064
+git submodule update --init arch/xc2064/external/shirriff-xc2064 arch/xc2064/external/openxc2064
 ```
 
 ## Was nachgebildet ist
@@ -96,7 +97,7 @@ kurz (`LUT3`, `LUT4`, `DFF`, `IOB`), `getBelBucketForCellType()` ordnet sie zu. 
 yosys siehe unten.
 
 Pins stehen in einer **PCF-Datei** wie bei iCE40 (`set_io [-nowarn] <Port> <Pin>`, Busse als
-`leds[0]`, Pins als Pin des Gehäuses: P2…P68 im PC68, P1…P48 im PD48), die nextpnr mit
+`leds[0]`, Pins als Pin des Gehäuses: P2…P68 im PC68, P1…P48 im PD48, P2…P44 im PC44, A2…L10 im PG68), die nextpnr mit
 `--vopt pcf=<Datei>` liest. `flow.sh` nimmt `design.pcf` neben `design.v` automatisch, `PCF=…` wählt eine
 andere. Ohne Eintrag entscheidet der Placer. Takte legt `pack()` selbst an die Pads der Taktpuffer (außer
 mit `--vopt noclkbuf`): das Netz mit den meisten Speicherelementen an GCLK (P9, ist es belegt P11), das
@@ -154,7 +155,8 @@ braucht der ganze Test mit der Gegenprobe über Shirriffs Decoder knapp 1 min, m
 aus Stufe 10 (136 Läufe, der längste mit 1238 Iterationen) knapp 3 min, mit den Läufen über die
 Taktpuffer aus Stufe 11 (152 Läufe) 2,5–3 min. Mit den Taktpuffern als Standard (Stufe 12, der Takt
 der Beispiele läuft über GCLK statt über die long.2 jeder Spalte) braucht der längste Lauf 276
-Iterationen, der ganze Test gut 2 min.
+Iterationen, der ganze Test gut 2 min, mit den Prüfungen von LCA und XNF (152 Läufe, 24 XNF-Netzlisten)
+knapp 3 min.
 
 ## Ablauf
 
@@ -214,7 +216,12 @@ Takt vom Pad), bei `noclkbuf` keinen. Zeilen
 `// erwartet: <Zelltyp> <Anzahl>` im Design prüfen schon die Synthese (`shiftreg.v` verlangt 8
 `XC2000_FGM`, fällt der Pass aus, schlägt der Test fehl). Die Läufe laufen parallel, höchstens
 `TEST_JOBS` gleichzeitig (Standard `JOBS`, nie mehr als 10); die Zeilen erscheinen trotzdem in fester
-Reihenfolge:
+Reihenfolge. Nach den Läufen schreibt `tools/xc2064xnf` je Design die XNF-Netzliste für XACT in drei Fassungen
+(aus Gattern, mit `--lut`, mit `--iobff`, Tabelle *XNF*), und `test/check_xact.py` prüft jede: Aufbau, nur
+Symbole aus `xc2064db/xnf.py` mit ihren Pins, jedes Netz mit genau einem Treiber, Pads nur an Puffern,
+höchstens ein GCLK und ein ACLK, Speicherelemente und Pads so viele wie bei `synth_xc2064` (mit `--iobff`
+auch gleich viele `INFF`) und ein `LOC` für jeden Pin der PCF. XNFMAP selbst läuft nur in DOSBox (siehe
+[XNF für XACT](#xnf-für-xact-toolsxc2064xnf)). Die Spalten der Läufe:
 
 | Spalte | Prüfung |
 |---|---|
@@ -223,6 +230,7 @@ Reihenfolge:
 | Pips | `test/extract_netlist.py` gewinnt die Netzliste allein aus den belegten Bels und den benutzten Pips zurück, also aus dem, was ein Bitstream festhält. Jeder Eingang muss am Treiber hängen, den die Netzliste von nextpnr vorsieht, keiner darf zwei haben, und kein benutzter Pip darf verwaist sein. Die so gewonnene Netzliste muss ebenfalls äquivalent zum RTL sein. Das deckt Platzierung und Routing mit ab |
 | Bitstream | Rundlauf über den echten Bitstream: nextpnr schreibt die Konfiguration als Text (`--vopt out=`), `xc2064pack` macht daraus eine RBT-Datei, `xc2064unpack` und noch einmal `xc2064pack` geben sie bitgenau wieder, und `xc2064netlist` gewinnt allein aus der RBT-Datei (Namen von Ports und Registern aus der Textdatei) eine Netzliste zurück, die formal äquivalent zum RTL sein muss. Ein verfälschtes LUT-Bit fällt dabei auf |
 | Shirriff | Unabhängige Gegenprobe: Shirriffs Decoder (`tools/xc2064shirriff`) liest die RBT-Datei mit seinem eigenen Leser und muss sie so dekodieren wie das Paket (siehe unten). `-` ohne das Python-Paket `quickjs` |
+| LCA | `tools/xc2064lca` schreibt die Konfiguration als LCA für MAKEBITS, und `test/check_xact.py` prüft sie gegen die RBT-Datei: zu jeder benutzten CLB und jedem IOB genau ein Block, Base, Config und Equate wie dekodiert, und die Pins jedes Netzes hängen im Routing-Graphen über die programmierten Bits zusammen, verschiedene Netze getrennt (an den Taktpuffern getrennt wie in der LCA). MAKEBITS selbst läuft nur in DOSBox außerhalb des Tests (siehe [Taktpuffer](#taktpuffer-eingänge-makebits)) |
 | Fmax | Kleinste Frequenz aller Takte. Mit `FMIN=…` (MHz) ist ein Wert darunter ein Fehler |
 | Routing | Iterationen und Laufzeit von router2, nur zur Information |
 
@@ -238,7 +246,7 @@ der falschen Quelle fallen jeweils auf.
 
 Die Rundläufe prüfen das Paket mit sich selbst: Ein Fehler, der beim Schreiben und Lesen gleich ist
 (etwa eine falsche Bitreihenfolge der LUTs), fiele dort nicht auf. Deshalb läuft zusätzlich Shirriffs
-Decoder aus `shirriff-xc2064/html` (`draw.js`, `karnaugh.js`, `parse.js`, `iob.js`, `clb.js`) ohne Browser in
+Decoder aus `external/shirriff-xc2064/html` (`draw.js`, `karnaugh.js`, `parse.js`, `iob.js`, `clb.js`) ohne Browser in
 QuickJS (Python-Paket `quickjs`, steht in `.devcontainer/requirements.txt`; `xc2064db/shirriff.py` stellt
 `window`, `$`, `alert` und `assert` bereit). Verglichen werden je Bitstream:
 
@@ -362,16 +370,17 @@ Benutztes immer obenauf.
 
 ## Datenquellen und Bitstream-Werkzeuge
 
-Der Weg zu einem echten Bitstream baut auf zwei Submodules auf. Im Submodule selbst ändert nichts, beide
-werden nur gelesen.
+Der Weg zu einem echten Bitstream baut auf zwei Submodules in `external/` auf. Im Submodule selbst ändert
+nichts, beide werden nur gelesen.
 
 | Submodule | Commit | genutzt |
 |---|---|---|
 | `shirriff-xc2064` ([shirriff/xc2064](https://github.com/shirriff/xc2064)) | `4d35c218` (25.05.2021) | `html/XC2064-def.txt` (Name jedes der 11.360 Bits), `html/draw.js` (Leitungsnamen und ihre Lage), `html/clb.js` (CLB-Eingangs-Muxe), `html/iob.js` (IOBs), `obsolete/test/TEST1.RBT` mit `TEST1.LCA` |
 | `openxc2064` ([rates37/openxc2064](https://github.com/rates37/openxc2064), MIT) | `db348a02` (03.10.2026) | `bitstream/XACT_comparisons/*.BIT` und `hardware/bitstreams/AND_OR.BIT` (mit XACT erzeugt), `possible_connections` in `bitstream/generate_bitstream.py` als Gegenprobe |
 
-XACT dient nur als Blackbox: MAKEBITS (LCA → Bitstream) und XDELAY laufen ohne Dongle in einer DOSBox
-außerhalb des Repos und liefern Gegenproben, etwa die Codes der Taktpuffer-Eingänge. Die Gerätedaten von
+XACT dient nur als Blackbox: MAKEBITS (LCA → Bitstream), XDELAY sowie XNFMERGE, XNFPREP, XNFMAP und MAP2LCA
+(XNF → unplatzierte LCA) laufen ohne Dongle in einer DOSBox außerhalb des Repos und liefern Gegenproben, etwa
+die Codes der Taktpuffer-Eingänge. Die Gerätedaten von
 XACT (.DEV, .DIE, .BSD, .SPD) werden nicht dekodiert, XACT-Dateien liegen nicht im Repo.
 
 **Abgleich der beiden Quellen** (`python3 -m xc2064db`, siehe unten). Die Herkunft der Daten von
@@ -406,6 +415,7 @@ Generator der Chipdb (Namen und Verbindungen) und die Bitstream-Werkzeuge (Bitka
 | `packages` | Gehäuse PC68, PD48, PC44 und PG68: Pin → Pad |
 | `graph` | Routing-Graph: Segmente aus den Trennstellen an den Matrizen und dem Modell der fünften Leitung, Verbindungen aus PIP-, Magic- und Mux-Bits. Der Generator `nextpnr/xc2064_arch_gen.py` baut daraus die Kacheln, `xc2064unpack` prüft daran die Bitstreams |
 | `lca` | `TEST1.LCA` von XACT lesen und gegen Dekodierung und Graph prüfen; eine Konfiguration als LCA für MAKEBITS schreiben (`write`, `tools/xc2064lca`) |
+| `xnf` | flache yosys-Netzliste → XNF-Netzliste für XNFMAP (`write`, `tools/xc2064xnf`), yosys-Skript dafür (`yosys_script`), PCF lesen |
 | `shirriff` | Shirriffs JavaScript-Decoder in QuickJS laden, eine RBT-Datei damit dekodieren und mit der eigenen Dekodierung vergleichen (`tools/xc2064shirriff`) |
 
 Was die Daten über das Original sagen:
@@ -472,7 +482,7 @@ Einsen ans Ende; das Lesen nimmt beides mit einem Hinweis an.
 
 ```
 device XC2064
-package PD48                               # Gehäuse für den RBT-Kopf (PC68 oder PD48)
+package PD48                               # Gehäuse für den RBT-Kopf (PC68, PD48, PC44 oder PG68)
 clb AB BASE:FG F:A:B:C G:A:C:Q LUTF:96 LUTG:E8 X:F Y:G Q:FF SET:A RES:D CLK:K:NOT
 iob P8 I:Q                                 # Eingang des IOB direkt (PAD) oder gelatcht (Q, FF im IOB)
 mux AB.A row.A.local.1                     # CLB-Eingang und gewählte Quellleitung (oder none)
@@ -553,6 +563,9 @@ python3 arch/xc2064/tools/xc2064lca design.cfg.txt -o DESIGN.LCA   # dann in DOS
 python3 arch/xc2064/tools/xc2064pack design.cfg.txt -o design.rbt --compare DESIGN.RBT
 ```
 
+Ohne DOSBox prüft der Regressionstest die LCA jedes Laufs gegen dessen Bitstream (Spalte *LCA*, siehe
+[Regressionstest](#regressionstest)).
+
 Ergebnis (17.10.2026) für 44 Läufe: aus dem Regressionstest je Beispiel der Standard-Seed mit und ohne PCF
 (mit Taktpuffern), `--vopt noclkbuf` mit und ohne PCF und das PD48 (40), dazu die 4 Läufe mit Takten an P11
 und P46 aus Stufe 12 (`blinky.v` mit dem Takt an P11, `latch_sr.v` mit `clk` an P46 und `en` an P11, mit
@@ -562,6 +575,54 @@ mit ihren Gleichungen, IOBs, Optionen und die Richtung jedes Repowering-Puffers.
 nur bei den Puffern abgewichen: `xc2064pack` ließ Puffer, an deren einer Seite ein getriebenes Netz endet,
 in der Grundstellung, die in das Netz hinein zeigen kann; MAKEBITS zeigt sie vom Treiber weg. Das tut
 jetzt auch `xc2064db.graph.bidi_directions`.
+
+### XNF für XACT (`tools/xc2064xnf`)
+
+`tools/xc2064xnf` übersetzt ein Verilog-Design in eine XNF-Netzliste, wie sie damals Schaltplan- und
+Synthesewerkzeuge für XACT schrieben. yosys synthetisiert dafür nur bis zu einfachen Gattern und FFs bzw.
+Latches (`xc2064db.xnf.yosys_script`, Speicherelemente wie bei `synth_xc2064`), die Abbildung auf CLBs und IOBs
+macht XNFMAP. So lässt sich die Abbildung von `synth_xc2064` und nextpnr mit der von Xilinx vergleichen. Es
+kommen nur Symbole aus `XACT\DATA\XLXLGL2K.XNF` vor, der Liste der erlaubten XC2000-Symbole (Tabelle in
+`xc2064db/xnf.py`).
+
+```bash
+python3 arch/xc2064/tools/xc2064xnf arch/xc2064/examples/blinky.v -o BLINKY.XNF   # Pins aus blinky.pcf
+python3 arch/xc2064/tools/xc2064xnf design.v --lut -o DESIGNL.XNF   # Logik schon als LUTs (EQN-Symbole)
+# in DOSBox, alles ohne Dongle:
+#   XNFMERGE BLINKY.XNF BLINKY.XFF; XNFPREP BLINKY.XFF BLINKY.XTF; XNFMAP BLINKY.XTF BLINKY.MAP; MAP2LCA BLINKY.MAP BLINKY.LCA
+```
+
+Optionen: `--pcf` (Standard: `design.pcf` neben `design.v` wie bei `flow.sh`; die Pins werden `LOC=Pxx`),
+`--top`, `--package`/`--speed` (Zeile `PART`, Standard `2064PC68-70`), `--json` (Netzliste von yosys behalten;
+eine JSON-Netzliste geht auch als Eingabe). Takte aus einem Pad, die nur Speicherelemente takten, laufen über
+GCLK, ein zweiter über ACLK (`--gclk`/`--aclk` legen den Eingang fest, `--noclkbuf` sperrt die Auswahl).
+`--iobff` legt FFs direkt hinter einem Eingang wie `xc2064_iobff` ins IOB (`INFF`); von selbst tut XNFMAP das nicht.
+Der Regressionstest schreibt für jedes Beispiel alle drei Fassungen (aus Gattern, `--lut`, `--iobff`) und prüft
+sie ohne XACT (Tabelle *XNF*, siehe [Regressionstest](#regressionstest)).
+
+MAP2LCA schreibt eine unplatzierte LCA: Die Blöcke liegen vorläufig auf AA, AB, … und P2, P3, …, die Pins aus der
+PCF stehen als `place block` in der `.SCP`, die APR liest. Geprüft am 18.10.2026 mit XACT 5.2.0: Alle acht
+Beispiele laufen in beiden Varianten ohne Fehler durch. XNFPREP gibt nur Hinweise (Inverter, die eine eigene
+Funktion belegen; ein Netz mit 26 Lasten in `uart_tx.v`). XNFMAP warnt bei `rst`, weil `RST` ein reservierter
+Blockname ist, und nennt den IOB dann `RST_I`. In der LCA stimmen alle Sonderfälle: negative Flanke
+`CLK:K:NOT`, asynchrones Set/Reset `SET:A RES:D`, Latch `Q:LATCH` mit dem Enable über ACLK, Tristate
+`BUF:TRI` mit `oe_n` direkt an T (XNFPREP hebt die beiden Inverter auf), Bus `I:PAD BUF:TRI`, mit `--iobff`
+`I:Q` und GCLK an den K der IOBs. Belegte CLBs:
+
+| Beispiel | XNFMAP aus Gattern | XNFMAP mit `--lut` | nextpnr (`flow.sh`, SEED=1) |
+|---|---|---|---|
+| `blinky.v` | 29 | 20 | 22 |
+| `ampel.v` | 16 | 19 | 20 |
+| `bcd7seg.v` | 64 | 53 | 54 |
+| `inreg.v` | 8, mit `--iobff` 4 | 8 | 8 |
+| `latch_sr.v` | 4 | 4 | 4 |
+| `shiftreg.v` | 17 | 16 | 8 (FGM) |
+| `tristate.v` | 8 | 12 | 8 |
+| `uart_tx.v` | 56 | 52 | 47 |
+
+Bei `inreg.v` mit `--iobff` kommt XNFMAP mit 4 CLBs aus, weil es die Flankenerkennung `s1 & ~s2` in den
+G-Generator der CLB mit dem FF von `s2` legt (`X:Q Y:G`, `G=(A*~Q)`); nextpnr belegt 8. Den Mux-Modus FGM nutzt
+XNFMAP bei `shiftreg.v` nicht.
 
 ## Ausbaustufen
 

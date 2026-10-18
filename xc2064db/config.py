@@ -28,7 +28,6 @@ Bidi- und sonstige Bit; daraus ergibt sich mit encode() jedes Bit wieder (verlus
 XACT-Bitstreams). Fehlt etwas im Text (Ausgabe von nextpnr), gilt der Grundzustand von XACT (blocks.py).
 """
 import collections
-import re
 
 from . import bitmap, blocks, clbmux, iobmux, lines as lines_mod, switches
 

@@ -16,8 +16,8 @@ source "$ARCH/../../scripts/lib.sh"
 OUT="$FAT_BUILD/flows/xc2064/test/bitstreams"
 files=("$@")
 if [[ ${#files[@]} -eq 0 ]]; then
-	files=("$ARCH"/openxc2064/bitstream/XACT_comparisons/*.BIT "$ARCH"/openxc2064/hardware/bitstreams/AND_OR.BIT
-		"$ARCH"/shirriff-xc2064/obsolete/test/TEST1.RBT)
+	files=("$ARCH"/external/openxc2064/bitstream/XACT_comparisons/*.BIT "$ARCH"/external/openxc2064/hardware/bitstreams/AND_OR.BIT
+		"$ARCH"/external/shirriff-xc2064/obsolete/test/TEST1.RBT)
 fi
 mkdir -p "$OUT"
 failed=0

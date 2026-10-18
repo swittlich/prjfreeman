@@ -1,7 +1,7 @@
-"""Gegenprobe mit Shirriffs Bitstream-Decoder: seine Skripte (shirriff-xc2064/html: draw.js, karnaugh.js,
-parse.js, iob.js, clb.js) laufen ohne Browser in QuickJS (Python-Paket quickjs), dekodieren eine RBT-Datei mit
-seinem eigenen Leser, und das Ergebnis wird mit der eigenen Dekodierung (config.decode, Tabellen aus
-iobmux/clbmux) verglichen.
+"""Gegenprobe mit Shirriffs Bitstream-Decoder: seine Skripte (external/shirriff-xc2064/html: draw.js,
+karnaugh.js, parse.js, iob.js, clb.js) laufen ohne Browser in QuickJS (Python-Paket quickjs), dekodieren eine
+RBT-Datei mit seinem eigenen Leser, und das Ergebnis wird mit der eigenen Dekodierung (config.decode, Tabellen
+aus iobmux/clbmux) verglichen.
 
 Unabhängig ist vor allem das Innere der CLBs: Shirriff liest Wahrheitstabellen, Eingangsauswahl, Basis, X/Y,
 Speicherelement, Set/Reset und Takt direkt aus der Bit-Tabelle in Chip-Lage (eigene Bitreihenfolge der LUTs),

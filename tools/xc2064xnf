@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""xc2064xnf: Verilog (über yosys) oder yosys-JSON -> XNF-Netzliste für XACTs XC2000-Ablauf (xc2064db/xnf.py).
+
+    xc2064xnf design.v [mehr.v ...] -o DESIGN.XNF [--pcf design.pcf] [--top top] [--lut] [--json design.json]
+    xc2064xnf design.json -o DESIGN.XNF [...]
+
+Ein .v synthetisiert yosys (YOSYS=..., Skript in xnf.yosys_script) flach zu einfachen Gattern und FFs bzw. Latches,
+die Abbildung auf CLBs macht XNFMAP. Mit --lut bildet ABC die Logik schon auf LUTs mit bis zu 4 Eingängen ab
+(EQN-Symbole). Pins aus der PCF-Datei (Standard: design.pcf neben design.v wie bei flow.sh) werden LOC=Pxx.
+Takte, die nur Speicherelemente takten, laufen über GCLK und ACLK (--gclk/--aclk legen fest, --noclkbuf sperrt),
+mit --iobff gehen FFs direkt hinter einem Eingang ins IOB.
+Danach in DOSBox (DOS kennt nur Namen im 8.3-Format):
+
+    XNFMERGE DESIGN.XNF DESIGN.XFF
+    XNFPREP DESIGN.XFF DESIGN.XTF
+    XNFMAP DESIGN.XTF DESIGN.MAP
+    MAP2LCA DESIGN.MAP DESIGN.LCA
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+from xc2064db import packages, xnf  # noqa: E402
+
+
+def synthesize(files, top, lut, keep):
+    """yosys-JSON für Verilog-Dateien (keep: JSON zusätzlich dort ablegen)"""
+    with tempfile.TemporaryDirectory() as tmp:
+        json_file = keep or os.path.join(tmp, "design.json")
+        cmd = [os.environ.get("YOSYS", "yosys"), "-q", "-p", xnf.yosys_script(top, lut, json_file)] + files
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode:
+            sys.exit("xc2064xnf: yosys bricht ab:\n%s%s" % (r.stdout, r.stderr))
+        return json.load(open(json_file))
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("design", nargs="+", help="Verilog-Dateien oder eine JSON-Netzliste von yosys")
+    ap.add_argument("-o", "--output", required=True, help=".XNF")
+    ap.add_argument("--top", help="oberstes Modul (Standard: von yosys bestimmt)")
+    ap.add_argument("--pcf", help="Pins (set_io <Port> <Pin>); Standard: design.pcf neben dem ersten .v")
+    ap.add_argument("--lut", action="store_true", help="Logik als LUTs mit bis zu 4 Eingängen statt als Gatter")
+    ap.add_argument("--json", help="JSON-Netzliste von yosys hier ablegen")
+    ap.add_argument("--package", default="PC68", help="Gehäuse (%s, Standard PC68)" % ", ".join(packages.PACKAGES))
+    ap.add_argument("--speed", default="-70", help="Geschwindigkeitsstufe wie bei XACT (Standard -70)")
+    ap.add_argument("--gclk", metavar="PORT", help="Eingang (wie im Verilog, z.B. clk) über GCLK")
+    ap.add_argument("--aclk", metavar="PORT", help="Eingang über ACLK")
+    ap.add_argument("--noclkbuf", action="store_true", help="Taktpuffer nur mit --gclk/--aclk")
+    ap.add_argument("--iobff", action="store_true", help="FFs direkt hinter einem Eingang ins IOB (INFF) wie "
+                    "xc2064_iobff; ohne macht das XNFMAP nicht")
+    args = ap.parse_args()
+
+    package = args.package.upper()
+    if package not in packages.PACKAGES:
+        sys.exit("xc2064xnf: unbekanntes Gehäuse %s (%s)" % (package, ", ".join(packages.PACKAGES)))
+    first = args.design[0]
+    if first.endswith(".json"):
+        if len(args.design) > 1:
+            sys.exit("xc2064xnf: nur eine JSON-Netzliste")
+        netlist = json.load(open(first))
+    else:
+        netlist = synthesize(args.design, args.top, args.lut, args.json)
+    pcf = args.pcf
+    if pcf is None and first.endswith(".v") and os.path.exists(first[:-2] + ".pcf"):
+        pcf = first[:-2] + ".pcf"
+    try:
+        pins = xnf.read_pcf(open(pcf, encoding="utf-8").read()) if pcf else {}
+        top, module = xnf.top_module(netlist, args.top)
+        text, stats, clkbufs = xnf.write(module, "2064%s%s" % (package, args.speed), os.path.basename(first), pins,
+                                         not args.noclkbuf, args.gclk, args.aclk, args.iobff)
+    except ValueError as e:
+        sys.exit("xc2064xnf: %s" % e)
+    open(args.output, "w", newline="").write(text)
+    print("xc2064xnf: %s (%s) -> %s: %s%s%s" % (
+        os.path.basename(first), top, os.path.basename(args.output),
+        ", ".join("%d %s" % (n, k) for k, n in stats.items() if n),
+        ", " + ", ".join(clkbufs) if clkbufs else "", ", Pins aus " + os.path.basename(pcf) if pcf else ""),
+        file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

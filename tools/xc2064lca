@@ -4,8 +4,8 @@ von XACT, für die Gegenprobe mit MAKEBITS (xc2064db/lca.py, write).
 
     xc2064lca design.txt -o DESIGN.LCA [--package PC68|PD48|PC44|PG68] [--speed -70]
 
-MAKEBITS übersetzt die LCA-Datei in einen Bitstream, der mit dem von xc2064pack bis auf die Richtung von
-Repowering-Puffern auf unbenutzten Segmenten übereinstimmen soll. DOS kennt nur Namen im 8.3-Format.
+MAKEBITS übersetzt die LCA-Datei in einen Bitstream, der mit dem von xc2064pack bitgenau übereinstimmen soll
+(xc2064pack --compare), auch in der Richtung der Repowering-Puffer. DOS kennt nur Namen im 8.3-Format.
 """
 import argparse
 import os
