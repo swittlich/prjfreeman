@@ -64,7 +64,7 @@ Contributions are welcome: bug reports, questions, improvements to the model, th
 and above all anyone who can try a bitstream on a real XC2064. Please open an issue or a pull request on
 [GitHub](https://github.com/swittlich/prjfreeman). Before submitting changes to the model or the tools, run
 `arch/xc2064/test/run.sh` (every run must pass) and, for the bitstream tools, `arch/xc2064/test/bitstreams.sh`.
-Contributions are accepted under the same license as the project (GPL-3.0-or-later, see [License](#license)).
+Contributions are accepted under the same license as the project (ISC, see [License](#license)).
 
 ## Acknowledgements
 
@@ -78,11 +78,9 @@ listed in [Data sources](docs/data-sources.md#references).
 
 Copyright (C) 2026 Sebastian Wittlich
 
-This project is free software: you can redistribute it and/or modify it under the terms of the
-[GNU General Public License](LICENSE) as published by the Free Software Foundation, either version 3 of the
-License, or (at your option) any later version. In short: you may use, study, change and share it, but
-whoever distributes it or a modified version must keep the copyright notices and make the complete source
-code available under the same license.
+This project is licensed under the [ISC License](LICENSE), the same permissive license as yosys and
+nextpnr. In short: you may use, copy, change and distribute it, also commercially and as part of closed
+source, as long as the copyright notice and the permission notice are kept. It comes without any warranty.
 
-The submodules in `external/` keep their own licenses. As usual with the GPL, your own designs and the
-netlists and bitstreams the tools generate from them are not affected.
+The submodules in `external/` keep their own licenses. Your own designs and the netlists and bitstreams the
+tools generate from them are not affected by the license of this project.

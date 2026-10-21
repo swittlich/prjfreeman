@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: ISC
 // Copyright (C) 2026 Sebastian Wittlich
 // Techmap from yosys-internal cells to the primitives of the XC2064 model.
 

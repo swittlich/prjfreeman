@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: ISC
 # Copyright (C) 2026 Sebastian Wittlich
 # Test of the bitstream tools with real bitstreams from Xilinx's XACT: the references from openxc2064
 # (bitstream/XACT_comparisons, hardware/bitstreams/AND_OR.BIT) and Shirriff's TEST1.RBT.

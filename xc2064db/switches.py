@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: ISC
 # Copyright (C) 2026 Sebastian Wittlich
 """Switch matrices: two per tile crossing (XY.8.1 and XY.8.2), none at the four corners of the chip.
 Each has 8 pins, 1-2 top, 3-4 right, 5-6 bottom, 7-8 left (draw.js, Switch.pinCoord). Every possible

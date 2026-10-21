@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: ISC
 // Copyright (C) 2026 Sebastian Wittlich
 // Graphics IDs: every line the GUI draws (the order is evaluated in xc2064.cc)
 // Channels (xc2064db.graph): vertical V1-V5 (local.1-5), VL1-VL4 (long.1-4), horizontal H1-H5 (local.1-5),

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: ISC
 # Copyright (C) 2026 Sebastian Wittlich
 # Pin assignment for bcd7seg.v: set_io <port> <PLCC68 pin>
 # Clock, reset and en at the top, the segments on the right, the digits at the bottom

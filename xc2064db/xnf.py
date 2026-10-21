@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: ISC
 # Copyright (C) 2026 Sebastian Wittlich
 """XNF netlist (Xilinx Netlist Format) for XACT's XC2000 flow from a flat yosys JSON netlist
 (tools/xc2064xnf). XACT turns it into an unplaced LCA file with XNFMERGE, XNFPREP, XNFMAP and MAP2LCA;

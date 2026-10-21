@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: ISC
 # Copyright (C) 2026 Sebastian Wittlich
 """xc2064netlist: XC2064 bitstream (.RBT/.BIT) -> Verilog netlist of XC2000_* cells (xc2064db/netlist.py),
 for the formal comparison with the RTL. Names of the ports and registers from the nextpnr text file.

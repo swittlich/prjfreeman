@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: ISC
 // Copyright (C) 2026 Sebastian Wittlich
 // Inputs through the FF in the IOB (latched input, XACT: I:Q): d is clocked into the IOBs by clk, followed by
 // a second stage in the CLBs and an edge detector. All IOBs on one side of the chip share a clock; with

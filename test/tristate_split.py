@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: ISC
 # Copyright (C) 2026 Sebastian Wittlich
 # Prepare tristates for the formal comparison in run.sh (yosys JSON, flat, after "tribuf -logic"):
 #   tristate_split.py <in.json> <out.json> <0|1>

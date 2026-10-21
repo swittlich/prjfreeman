@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: ISC
 # Copyright (C) 2026 Sebastian Wittlich
 # Complete flow for xc2064: yosys (synth_xc2064) -> nextpnr-himbaechel --device XC2064
 #   flow.sh [design.v] [further nextpnr options, e.g. --gui]

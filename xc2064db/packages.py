@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: ISC
 # Copyright (C) 2026 Sebastian Wittlich
 """Packages of the XC2064: package pin -> pad (named after the PLCC68 pin like the IOB Bels, P2 ... P68).
 

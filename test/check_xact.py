@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: ISC
 # Copyright (C) 2026 Sebastian Wittlich
 # Trial run of the XACT tools in run.sh, without DOSBox: checks what xc2064lca and xc2064xnf write.
 #   check_xact.py lca <design.LCA> <design.cfg.txt> <design.rbt>

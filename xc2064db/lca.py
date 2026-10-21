@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: ISC
 # Copyright (C) 2026 Sebastian Wittlich
 """TEST1.LCA (XACT 5.1.0) as a cross-check for TEST1.RBT: per net, XACT lists the pins (Addnet) and all
 programmed elements (NProgram) under its own names, per block (Editblk) Base, Config and the equations

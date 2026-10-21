@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: ISC
 # Copyright (C) 2026 Sebastian Wittlich
 """XC2064 data from the submodules in external/, as the common basis for the chipdb generator
 (names and connections) and the bitstream tools xc2064unpack/xc2064pack (bit map).

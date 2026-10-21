@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: ISC
 # Copyright (C) 2026 Sebastian Wittlich
 """xc2064pack: configuration as text (format: see xc2064db/config.py, from nextpnr with --vopt out= or from
 xc2064unpack) -> XC2064 bitstream as .RBT (exactly in the layout of XACT) or .BIT.

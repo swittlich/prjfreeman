@@ -1,12 +1,12 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: ISC
 // Copyright (C) 2026 Sebastian Wittlich
 /*
  *  nextpnr-himbaechel uarch "xc2064": model of the Xilinx XC2064 (1985, the first FPGA).
  *  Fabric description: xc2064_arch_gen.py.
  *
- *  This program is free software: you can redistribute it and/or modify it under the terms of the GNU
- *  General Public License as published by the Free Software Foundation, either version 3 of the License,
- *  or (at your option) any later version. See the file LICENSE.
+ *  Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee
+ *  is hereby granted, provided that the above copyright notice and this permission notice appear in all
+ *  copies. See the file LICENSE.
  */
 
 #include <algorithm>

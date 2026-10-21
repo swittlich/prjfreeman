@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: ISC
 # Copyright (C) 2026 Sebastian Wittlich
 """IOBs: sources of the output mux (O, "Pnn.O" in XACT) and of the tristate mux (T) with their codes, and the
 pips of the input (I) onto the lines, reproduced from Shirriff's iob.js (generateIobPips).

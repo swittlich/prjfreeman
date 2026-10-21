@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: ISC
 # Copyright (C) 2026 Sebastian Wittlich
 """Configuration of the logic blocks (CLB), the IOBs and the remaining options: bits <-> fields.
 

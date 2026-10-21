@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: ISC
 # Copyright (C) 2026 Sebastian Wittlich
 """Cross-check with Shirriff's bitstream decoder: his scripts (external/shirriff-xc2064/html: draw.js,
 karnaugh.js, parse.js, iob.js, clb.js) run without a browser in QuickJS (Python package quickjs), decode an

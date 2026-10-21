@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: ISC
 # Copyright (C) 2026 Sebastian Wittlich
 # Pin assignment for inreg.v: set_io <port> <PLCC68 pin>
 # d[1:0] at the top, d[3:2] on the left (two sides, two K muxes), q on the right, rise at the bottom

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: ISC
 // Copyright (C) 2026 Sebastian Wittlich
 // Test of the storage variants of the XC2064 model: flip-flop on the falling edge, asynchronous
 // set/reset and a transparent latch. Pins in latch_sr.pcf, the clock on P9 (GCLK).

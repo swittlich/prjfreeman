@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: ISC
 # Copyright (C) 2026 Sebastian Wittlich
 """Coverage report and cross-checks of the data sources:  python3 -m xc2064db  (in arch/xc2064)
 

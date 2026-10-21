@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: ISC
 # Copyright (C) 2026 Sebastian Wittlich
 # Pin assignment for shiftreg.v: set_io <port> <PLCC68 pin>
 # Clock and control at the top left, din on the top edge, q on the right edge

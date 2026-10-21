@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: ISC
 # Copyright (C) 2026 Sebastian Wittlich
 """Paths of the submodules (under external/) and reading their files. Paths are based on
 os.path.realpath(__file__), so that the package is also found via the symlink in upstream/nextpnr. Line endings
