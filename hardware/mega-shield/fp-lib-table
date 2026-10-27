@@ -1,0 +1,5 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "Arduino_MountingHole")(type "KiCad")(uri "${KIPRJMOD}/lib/footprints/Arduino_MountingHole.pretty")(options "")(descr ""))
+  (lib (name "prjfreeman")(type "KiCad")(uri "${KIPRJMOD}/lib/footprints/prjfreeman.pretty")(options "")(descr "prjfreeman: PLCC68 socket with XC2064 3D model"))
+)
