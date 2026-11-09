@@ -1,0 +1,79 @@
+(footprint "QR_prjfreeman"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(descr "QR-Code https://github.com/swittlich/prjfreeman, Silkscreen-Knockout, 10 x 10 mm (+1 mm Ruhezone)")
+	(tags "qr code prjfreeman github")
+	(property "Reference" "REF**"
+		(at 0 -7 0)
+		(layer "F.SilkS")
+		(hide yes)
+		(uuid "df3783dc-c99a-4f5e-a912-2e43620730df")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(property "Value" "QR_prjfreeman"
+		(at 0 7 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "49b63054-59bd-4fe9-baca-ff099227c5d5")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "0673a522-30fe-4e1f-ba1b-4c16920d831a")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "a16fe311-25ff-4e09-9747-0445ce3d8ceb")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(attr board_only exclude_from_bom)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_rect
+		(start -6.25 -6.25)
+		(end 6.25 6.25)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(fill no)
+		(layer "F.CrtYd")
+		(uuid "b17738ee-b6c5-4b75-9366-aa74ccd96517")
+	)
+	(barcode
+		(at 0 0 0)
+		(layer "F.SilkS")
+		(size 10 10)
+		(text "https://github.com/swittlich/prjfreeman")
+		(text_height 1.27)
+		(type qr)
+		(ecc_level M)
+		(hide yes)
+		(knockout yes)
+		(margins 1 1)
+		(uuid "d47f0fcd-2cee-451a-9f01-e9b6d1689875")
+	)
+	(embedded_fonts no)
+)
