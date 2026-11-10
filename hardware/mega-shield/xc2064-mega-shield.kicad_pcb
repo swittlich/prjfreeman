@@ -24205,7 +24205,7 @@
 			(justify left bottom)
 		)
 	)
-	(gr_text "prjfreeman  XC2064 Arduino Mega shield  rev 0.1"
+	(gr_text "prjfreeman  XC2064 Arduino Mega shield  rev 0.2"
 		(at 168.7 52.4 0)
 		(layer "B.SilkS")
 		(uuid "f9843039-f534-47da-8fac-36f717c0b5f2")

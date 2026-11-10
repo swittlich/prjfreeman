@@ -100,7 +100,7 @@
 	)
 	(text "prjfreeman: Arduino Mega 2560 shield for a Xilinx XC2064 (PC68 in a PLCC68 socket)\n\n- every one of the 58 pads and the six configuration pins goes to its own Mega pin\n  through 1k (sheet 'Series resistors'); 66 of the 70 Mega pins are used\n- configuration in slave serial mode over SPI: SCK = CCLK, MOSI = DIN, MISO = M1/RDATA\n- clocks from 16-bit timers: P9 (GCLK) = D12 (OC1B), P2-P8 and P67/P68 on timer outputs too,\n  frequency counter T5 = D47 (P56), input capture ICP5/ICP4 = D48/D49 (P57/P59)\n- the XC2064 runs from VCC_FPGA: load switch (Mega D4) and INA226 (I2C D20/D21)\n- 8 LEDs on P51, P53-P59 via 74HCT541, push button on D13\n\nFirmware rule: before VCC_FPGA goes off, all Mega pins become inputs without pull-up."
 		(exclude_from_sim no)
-		(at 312.42 124.46 0)
+		(at 194.818 257.81 0)
 		(effects
 			(font
 				(size 1.27 1.27)
